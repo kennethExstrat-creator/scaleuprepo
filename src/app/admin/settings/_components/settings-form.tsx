@@ -734,7 +734,11 @@ export function SettingsForm({
             id={fieldId("requireMfa")}
             label="Require two-factor authentication"
             error={errors.requireMfa}
-            description="Everyone signs in with their password and a code from an authenticator app. The database enforces it too."
+            description={
+              initial.requireMfa
+                ? "Everyone signs in with their password and a code from an authenticator app, and the database enforces it too (BRD B11). It can't be turned off: if someone has lost their authenticator app, reset their two-factor authentication on the Users page."
+                : "Everyone signs in with their password and a code from an authenticator app. The database enforces it too."
+            }
             footer={
               <>
                 <DefaultHint
@@ -748,8 +752,7 @@ export function SettingsForm({
                     <AlertTitle>Two-factor authentication is off</AlertTitle>
                     <AlertDescription>
                       Everyone, including ScaleUp staff who can see the whole portfolio, can sign in with a password
-                      only. Turn it off only for a short time, for example while someone recovers access, and turn it
-                      back on as soon as you can.
+                      only. Turn it on and save: once on, it stays on for everyone (BRD B11).
                     </AlertDescription>
                   </Alert>
                 ) : null}
@@ -760,9 +763,12 @@ export function SettingsForm({
               <Switch
                 id={fieldId("requireMfa")}
                 checked={text.requireMfa}
-                onCheckedChange={(checked) => set("requireMfa", checked)}
+                // BRD B11: it can be turned on (an older database may have it off) but never off.
+                onCheckedChange={(checked) => {
+                  if (checked || !initial.requireMfa) set("requireMfa", checked);
+                }}
                 aria-describedby={describedBy(fieldId("requireMfa"), errors.requireMfa)}
-                disabled={pending}
+                disabled={pending || initial.requireMfa}
               />
               <span className={cn("text-sm font-medium", mfaOff && "text-destructive")}>
                 {text.requireMfa ? "Required for everyone" : "Not required"}

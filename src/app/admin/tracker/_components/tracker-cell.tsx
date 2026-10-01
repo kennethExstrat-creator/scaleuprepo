@@ -11,6 +11,8 @@ export const CELL_STATE_CLASSES: Record<CellState, string> = {
   submitted: TONE_BADGE_CLASSES.info,
   changes_requested: TONE_BADGE_CLASSES.warning,
   approved: TONE_BADGE_CLASSES.success,
+  // Approved, but the owner asked to amend it (BRD B8): amber with a dashed ring, unlike "changes requested".
+  amendment_requested: `${TONE_BADGE_CLASSES.warning} outline-1 outline-dashed outline-warning/70 -outline-offset-4`,
   overdue: TONE_BADGE_CLASSES.danger,
   escalated: "bg-destructive text-white ring-destructive",
 };

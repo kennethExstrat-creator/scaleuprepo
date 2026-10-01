@@ -55,7 +55,8 @@ function param(request: NextRequest, key: string): string | undefined {
 /**
  * GET /api/exports/portfolio?format=xlsx|csv&fund=<id or code>&from=YYYY-MM&to=YYYY-MM&status=approved|all
  * — one row per company and month with the figures, derived metrics and RM columns (BRD A13, §10 data
- * extract); the Excel file adds a "Revenue segments" sheet (BRD B30). ScaleUp staff only (any role).
+ * extract); the Excel file adds the "Revenue segments" (BRD B30), "KPIs" and "Period closes" sheets. ScaleUp
+ * staff only (any role).
  * Logged as `export` / `portfolio_data`.
  */
 export async function GET(request: NextRequest) {
@@ -78,6 +79,7 @@ export async function GET(request: NextRequest) {
       to: query.to ?? null,
       status: query.status,
       withSegments: query.format === "xlsx",
+      withDetails: query.format === "xlsx",
     });
     if (!data.found) throw new ExportHttpError(404, "That fund was not found.");
     const meta: PortfolioExportMeta = {
@@ -100,7 +102,7 @@ export async function GET(request: NextRequest) {
     const body =
       query.format === "csv"
         ? portfolioCsv(data.rows)
-        : await workbookBytes(buildPortfolioWorkbook(data.rows, meta, data.segmentRows));
+        : await workbookBytes(buildPortfolioWorkbook(data.rows, meta, data.segmentRows, data.details));
 
     const rowCount = data.rows.length;
     const { error } = await sb.rpc("log_audit_event", {
@@ -117,6 +119,7 @@ export async function GET(request: NextRequest) {
         rows: rowCount,
         companies: new Set(data.rows.map((row) => row.companyId)).size,
         ...(data.segmentRows ? { segment_rows: data.segmentRows.length } : {}),
+        ...(data.details ? { kpi_rows: data.details.kpiRows.length, period_closes: data.details.closeRows.length } : {}),
       },
     });
     if (error) throw error;

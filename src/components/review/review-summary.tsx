@@ -27,6 +27,8 @@ export type ReviewSummaryProps = {
   currency: string;
   companyStatus: CompanyStatus;
   lastSavedAt: string | null;
+  /** An approved month whose owner asked to amend it (BRD B8): when they asked (pendingAmendment). */
+  amendmentRequestedAt?: string | null;
   className?: string;
 };
 
@@ -67,6 +69,14 @@ export function ReviewSummary(props: ReviewSummaryProps) {
               <StatusBadge status={props.status} />
               {props.overdue ? (
                 <StatusBadge status={props.status} overdue />
+              ) : null}
+              {props.status === "approved" && props.amendmentRequestedAt ? (
+                <ToneBadge
+                  tone="warning"
+                  title={`The company owner asked to amend this month on ${formatDate(props.amendmentRequestedAt)}`}
+                >
+                  Amendment requested
+                </ToneBadge>
               ) : null}
               {props.overdue && props.daysOverdue > 0 ? (
                 <span className="text-xs text-destructive tabular-nums">

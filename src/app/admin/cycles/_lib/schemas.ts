@@ -68,3 +68,34 @@ export const fxRateKeySchema = z.object({
   currency: currencySchema,
   month: monthKeySchema,
 });
+
+/**
+ * The reporting-cycle settings Super Admins and Fund Admins change on this page (BRD A5, B10; RPC
+ * set_cycle_settings): the same ranges as the Settings page and the database.
+ */
+export const CYCLE_SETTINGS_LIMITS = {
+  dueDay: { min: 1, max: 28 },
+  graceDays: { min: 1, max: 365 },
+  escalationDays: { min: 0, max: 365 },
+} as const;
+
+const wholeNumberIn = (message: string, min: number, max: number) =>
+  z.number({ error: message }).int({ error: message }).min(min, { error: message }).max(max, { error: message });
+
+export const cycleSettingsSchema = z.object({
+  dueDay: wholeNumberIn("Choose a due day from 1 to 28.", CYCLE_SETTINGS_LIMITS.dueDay.min, CYCLE_SETTINGS_LIMITS.dueDay.max),
+  graceDays: wholeNumberIn(
+    "Enter a grace period from 1 to 365 days.",
+    CYCLE_SETTINGS_LIMITS.graceDays.min,
+    CYCLE_SETTINGS_LIMITS.graceDays.max,
+  ),
+  escalationDays: wholeNumberIn(
+    "Enter an escalation period from 0 to 365 days.",
+    CYCLE_SETTINGS_LIMITS.escalationDays.min,
+    CYCLE_SETTINGS_LIMITS.escalationDays.max,
+  ),
+  /** The settings row's `updated_at` the dialog was opened with (refused when someone saved since). */
+  expectedUpdatedAt: z.string().min(1).nullable(),
+});
+
+export type CycleSettingsValues = z.output<typeof cycleSettingsSchema>;

@@ -24,6 +24,7 @@
 import ExcelJS from "exceljs";
 import type { Cell, Row, Worksheet } from "exceljs";
 
+import { effectiveTotals, parsePeriodTotals, parseRestatedTotals } from "@/components/documents/totals";
 import {
   KPI_FREQUENCY_LABELS,
   NUMBER_FIELD_TYPES,
@@ -47,10 +48,12 @@ import {
   addMonths,
   compareMonths,
   halfOf,
+  isQuarterEnd,
   monthLabel,
   monthsBetween,
   parseInstant,
   parseMonthKey,
+  quarterOf,
   todayMYT,
   type ClosePeriod,
   type DateKey,
@@ -172,6 +175,21 @@ export type C4WorkbookInput = {
   kpis: C4Kpi[];
   /** Every submission of the company, any order. */
   months: C4Month[];
+  /**
+   * The company's half-year closes (optional): confirmed ones add their figures — restated to the
+   * management accounts where they were — under the half-year columns of "Revenue Lines" (BRD §6.1).
+   */
+  closes?: C4Close[];
+};
+
+/** A period close of the company (a period_closes row: the columns the workbook uses). */
+export type C4Close = {
+  period_type: "quarter" | "half";
+  label: string;
+  status: "open" | "confirmed";
+  computed_totals: Json | null;
+  restated_totals: Json | null;
+  restatement_reason: string | null;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -565,6 +583,37 @@ function halfYoy(model: C4Model, included: PreparedMonth[]): number | null {
   return any ? growthPct(current, previous) : null;
 }
 
+/**
+ * Revenue of a whole quarter or half-year: the sum over its months when every one of them is included with
+ * a revenue figure; null otherwise (a partial period would compare unlike with like).
+ */
+function completePeriodRevenue(model: C4Model, period: ClosePeriod): number | null {
+  let total = 0;
+  for (const key of period.months) {
+    const revenue = includedMonth(model, key)?.financials.revenue_total ?? null;
+    if (revenue === null) return null;
+    total += revenue;
+  }
+  return total;
+}
+
+/**
+ * Quarter-on-quarter revenue growth (BRD §6.1 "QoQ"), on the last month of a quarter: the quarter against
+ * the previous one, both complete; null on other months or when either quarter is incomplete.
+ */
+export function quarterQoq(model: C4Model, month: MonthKey): number | null {
+  if (!isQuarterEnd(month)) return null;
+  const quarter = quarterOf(month);
+  const previous = quarterOf(addMonths(quarter.startMonth, -1));
+  return growthPct(completePeriodRevenue(model, quarter), completePeriodRevenue(model, previous));
+}
+
+/** Half-on-half revenue growth (BRD §6.1 "HoH"): the half-year against the previous one, both complete. */
+export function halfHoh(model: C4Model, period: ClosePeriod): number | null {
+  const previous = halfOf(addMonths(period.startMonth, -1));
+  return growthPct(completePeriodRevenue(model, period), completePeriodRevenue(model, previous));
+}
+
 /** Σ amount × FX rate over the months that have the amount; null when one of them has no rate. */
 function sumRm(months: readonly PreparedMonth[], pick: (m: PreparedMonth) => number | null): number | null {
   let total = 0;
@@ -640,6 +689,8 @@ export function segmentLabel(segment: Pick<C4Segment, "name" | "is_active">): st
 
 /** Block headings of the Revenue Lines sheet (BRD B30). */
 export const COMPANY_SEGMENTS_HEADING = "Company revenue segments (add up to total revenue)";
+/** The block of confirmed half-year closes on "Revenue Lines" (figures restated to the management accounts noted). */
+export const CONFIRMED_HALVES_HEADING = "Confirmed half-year closes (restated to the management accounts where noted)";
 export const SCALEUP_LINES_HEADING = "ScaleUp revenue lines (need not add up to total revenue)";
 
 /**
@@ -966,6 +1017,25 @@ function writeFigureHeader(
   });
 }
 
+type ConfirmedHalf = { totals: PeriodTotals; restatedKeys: Set<string>; reason: string | null };
+
+/** The confirmed half-year closes by label ("H1 2026"): their figures with the restated ones in place. */
+function confirmedHalves(closes: readonly C4Close[]): Map<string, ConfirmedHalf> {
+  const halves = new Map<string, ConfirmedHalf>();
+  for (const close of closes) {
+    if (close.period_type !== "half" || close.status !== "confirmed") continue;
+    const computed = parsePeriodTotals(close.computed_totals);
+    if (!computed) continue;
+    const restated = parseRestatedTotals(close.restated_totals);
+    halves.set(close.label.trim(), {
+      totals: effectiveTotals(computed, restated),
+      restatedKeys: new Set(Object.keys(restated ?? {})),
+      reason: close.restatement_reason?.trim() || null,
+    });
+  }
+  return halves;
+}
+
 function runwayContent(cash: number | null, burn: number | null): CellContent {
   if (burn !== null && burn <= 0) return { value: "Cash-flow positive" };
   return { value: runwayMonths({ cash_in_bank: cash, burn_rate: burn }), format: "runway" };
@@ -980,7 +1050,7 @@ function writeRevenueLinesSheet(workbook: ExcelJS.Workbook, model: C4Model): voi
   writeNote(
     sheet,
     2,
-    `${currencyNote(currency)} ${includeNote(input.include)} Half-year columns: revenue and profit summed, cash and headcount at the latest month, burn averaged, runway = cash ÷ average burn.`,
+    `${currencyNote(currency)} ${includeNote(input.include)} Half-year columns: revenue and profit summed, cash and headcount at the latest month, burn averaged, runway = cash ÷ average burn. QoQ (on each quarter's last month) and HoH compare whole periods: blank until both are complete.`,
   );
 
   if (columns.length === 0) {
@@ -1068,8 +1138,51 @@ function writeRevenueLinesSheet(workbook: ExcelJS.Workbook, model: C4Model): voi
       month: (m) => ({ value: pctFraction(monthYoy(model, m)), format: "pct" }),
       half: (h) => ({ value: pctFraction(halfYoy(model, h.included)), format: "pct" }),
     },
+    {
+      // BRD §6.1: QoQ growth, on the last month of each quarter (both quarters complete).
+      label: "Revenue QoQ %",
+      month: (m) => ({ value: pctFraction(quarterQoq(model, m.key)), format: "pct" }),
+      half: () => ({ value: null }),
+    },
+    {
+      // BRD §6.1: HoH growth, in the half-year columns (both half-years complete).
+      label: "Revenue HoH %",
+      month: () => ({ value: null }),
+      half: (h) => ({ value: pctFraction(halfHoh(model, h.period)), format: "pct" }),
+    },
   ];
-  const afterFigures = writeFigureRows(sheet, FIGURES_HEADER_ROW + 2, columns, lines);
+  let afterFigures = writeFigureRows(sheet, FIGURES_HEADER_ROW + 2, columns, lines);
+
+  // Confirmed half-year closes (BRD §6.1, C4): the totals as the company confirmed them, restated to its
+  // management accounts where it did (a note on those cells gives the reason), under the half columns.
+  const halves = confirmedHalves(input.closes ?? []);
+  if (columns.some((column) => column.kind === "half" && halves.has(column.period.label))) {
+    const confirmedLine = (label: string, key: keyof PeriodTotals): FigureLine => ({
+      label,
+      indent: 1,
+      month: () => ({ value: null }),
+      half: (h) => {
+        const half = halves.get(h.period.label);
+        if (!half) return { value: null };
+        const restated = half.restatedKeys.has(key);
+        return {
+          value: half.totals[key],
+          format: "money",
+          note: restated
+            ? `Restated to the management accounts${half.reason ? `: ${half.reason}` : "."}`
+            : undefined,
+        };
+      },
+    });
+    afterFigures = writeFigureRows(sheet, afterFigures + 1, columns, [
+      { heading: CONFIRMED_HALVES_HEADING },
+      confirmedLine("Total revenue (confirmed)", "revenue_total"),
+      confirmedLine("Gross profit (confirmed)", "gross_profit"),
+      confirmedLine("Net profit (confirmed)", "net_profit"),
+      confirmedLine("Cash in bank (confirmed)", "cash_in_bank"),
+      confirmedLine("Monthly burn, average (confirmed)", "avg_burn_rate"),
+    ]);
+  }
 
   if (input.fxVisible && currency !== "MYR") {
     const blockHeader = sheet.getRow(afterFigures + 1);

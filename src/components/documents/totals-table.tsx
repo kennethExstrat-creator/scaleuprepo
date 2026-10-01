@@ -1,6 +1,7 @@
 import { Money } from "@/components/app/money";
 import { ToneBadge } from "@/components/app/status-badge";
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { formatMoney, formatPct } from "@/lib/format";
 import type { PeriodTotals } from "@/lib/metrics";
 import { cn } from "@/lib/utils";
 
@@ -12,6 +13,7 @@ import {
   type FigureKind,
   type RestatedTotals,
 } from "./totals";
+import type { RevenueComparison } from "./view-model";
 
 function Figure({ kind, value, currency }: { kind: FigureKind; value: number | null; currency: string }) {
   if (kind === "money") return <Money value={value} currency={currency} />;
@@ -28,6 +30,7 @@ export function TotalsTable({
   variant,
   currency,
   caption,
+  comparison = null,
 }: {
   /** Live totals (open) or the stored `computed_totals` (confirmed). */
   totals: PeriodTotals;
@@ -36,6 +39,8 @@ export function TotalsTable({
   variant: "live" | "confirmed";
   currency: string;
   caption: string;
+  /** Revenue against the previous quarter / half-year (QoQ, HoH; only when both periods are complete). */
+  comparison?: RevenueComparison | null;
 }) {
   const restatement = variant === "confirmed" && hasRestatement(restated) ? restated : null;
   const confirmed = restatement ? effectiveTotals(totals, restatement) : totals;
@@ -78,6 +83,24 @@ export function TotalsTable({
           })}
         </TableBody>
       </Table>
+      {comparison ? (
+        <p className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-t px-3 py-2 text-sm">
+          <span className="text-muted-foreground">
+            Revenue vs {comparison.previousLabel}{" "}
+            <abbr title={comparison.kind === "QoQ" ? "quarter on quarter" : "half-year on half-year"} className="no-underline">
+              ({comparison.kind})
+            </abbr>
+          </span>
+          <span className="text-right tabular-nums">
+            <span className="font-semibold">
+              {comparison.growthPct === null ? "—" : formatPct(comparison.growthPct, 1, { signed: true })}
+            </span>
+            <span className="ml-2 text-xs text-muted-foreground">
+              {comparison.previousLabel}: {formatMoney(comparison.previousRevenue, currency)}
+            </span>
+          </span>
+        </p>
+      ) : null}
     </div>
   );
 }

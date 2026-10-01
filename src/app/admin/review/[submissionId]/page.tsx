@@ -20,6 +20,7 @@ import { FlagsPanel } from "@/components/review/flags-panel";
 import { MonthNav, type MonthLink } from "@/components/review/month-nav";
 import { buildNarrativeSections } from "@/components/review/narrative";
 import { NarrativeComparison } from "@/components/review/narrative-comparison";
+import { pendingAmendment } from "@/components/review/amendment";
 import { PeriodCloseCard, type CoveringClose } from "@/components/review/period-close-card";
 import { ReviewActions } from "@/components/review/review-actions";
 import {
@@ -185,10 +186,13 @@ export default async function ReviewPage({ params }: ReviewPageProps) {
     canEditOnBehalf: canEnterData(ctx, company.id, company.status),
   };
   const actions = reviewActions(submission.status, permissions, approver);
+  // An owner's amendment request on this approved month that nobody has answered yet (BRD B8).
+  const amendment = pendingAmendment({ status: submission.status, approvedAt: submission.approved_at }, threads);
   const statusSummary = reviewStatusSummary(submission.status, {
     companyName: company.name,
     monthLabel: monthLabelLong(submission.month),
     companyActive: company.status === "active",
+    amendment,
   });
   const today = todayMYT();
   const graceDays = toFiniteNumber(bundle.settings?.backfill_grace_days) ?? DEFAULT_BACKFILL_GRACE_DAYS;
@@ -271,6 +275,7 @@ export default async function ReviewPage({ params }: ReviewPageProps) {
         currency={currency}
         companyStatus={company.status}
         lastSavedAt={submission.last_saved_at}
+        amendmentRequestedAt={amendment?.requestedAt ?? null}
       />
 
       <div className="grid gap-6 @5xl:grid-cols-[minmax(0,1fr)_20rem] @5xl:items-start @7xl:grid-cols-[minmax(0,1fr)_24rem]">

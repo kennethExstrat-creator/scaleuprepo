@@ -13,7 +13,7 @@
 // ScaleUp pages show names with the ScaleUp role from the profiles.
 
 import { CLOSE_PERIOD_TYPE_LABELS, SCALEUP_LABEL, SCALEUP_ROLE_LABELS } from "@/lib/constants";
-import { periodTotals, type MonthlyFinancials, type PeriodTotals } from "@/lib/metrics";
+import { growthPct, periodTotals, type MonthlyFinancials, type PeriodTotals } from "@/lib/metrics";
 import {
   addMonths,
   closePeriodOf,
@@ -39,7 +39,7 @@ import type {
   SubmissionStatus,
 } from "@/lib/types/enums";
 
-import { hasRestatement, parsePeriodTotals, parseRestatedTotals, type RestatedTotals } from "./totals";
+import { effectiveTotals, hasRestatement, parsePeriodTotals, parseRestatedTotals, type RestatedTotals } from "./totals";
 
 /** Who is looking: company users (ScaleUp staff shown as "<full name> (ScaleUp)", BRD B28) or ScaleUp staff. */
 export type DocumentsMode = "company" | "scaleup";
@@ -158,6 +158,11 @@ export type CloseView = {
   allSubmitted: boolean;
   /** Totals of the submitted and approved counted months, as they are now. */
   liveTotals: PeriodTotals;
+  /**
+   * Revenue against the previous quarter / half-year (BRD §6.1: QoQ, HoH growth): only when both periods
+   * are complete (every month submitted or approved; a confirmed close counts with its restated figures).
+   */
+  revenueComparison: RevenueComparison | null;
   /** The snapshot stored at confirmation (null while open). */
   computedTotals: PeriodTotals | null;
   /** Restated figures: of the confirmation, or kept from before a reopen until the next one. */
@@ -188,6 +193,18 @@ export type CompanyDocumentsView = {
   closes: CloseView[];
   /** Documents not tied to a period close, newest first. */
   otherDocuments: DocumentItem[];
+};
+
+/** A period's revenue against the previous period of the same type (QoQ for quarters, HoH for halves). */
+export type RevenueComparison = {
+  /** "QoQ" (quarter on quarter) or "HoH" (half-year on half-year). */
+  kind: "QoQ" | "HoH";
+  /** The previous period, e.g. "Q2 2026". */
+  previousLabel: string;
+  previousRevenue: number;
+  revenue: number;
+  /** Growth in percent (12.5 = +12.5 %); null when the previous revenue is 0. */
+  growthPct: number | null;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -321,6 +338,62 @@ export function liveCloseTotals(
   return periodTotals(series.filter((point) => isSubmittedStatus(point.status) && inMonthRange(point.month, from, end)));
 }
 
+type CloseRow = {
+  period_type: ClosePeriodType;
+  period_start: string;
+  status: PeriodCloseStatus;
+  computed_totals: Json | null;
+  restated_totals: Json | null;
+};
+
+/**
+ * The revenue of a whole period: a confirmed close's figures (restated ones included) when they cover
+ * every month of the period, else the submitted and approved months of `series` when every month of the
+ * period is one of them; null when the period is not complete.
+ */
+function completePeriodRevenue(
+  period: ClosePeriod,
+  close: CloseRow | undefined,
+  series: readonly FinancialRecord[],
+): number | null {
+  if (close?.status === "confirmed") {
+    const computed = parsePeriodTotals(close.computed_totals);
+    if (computed && computed.months_count === period.months.length) {
+      return effectiveTotals(computed, parseRestatedTotals(close.restated_totals)).revenue_total;
+    }
+  }
+  const points = series.filter((point) => isSubmittedStatus(point.status) && inMonthRange(point.month, period.startMonth, period.endMonth));
+  const months = new Set(points.flatMap((point) => parseMonthKey(point.month) ?? []));
+  if (months.size !== period.months.length) return null;
+  return periodTotals(points).revenue_total;
+}
+
+/**
+ * Revenue of a close's period against the previous period of the same type (BRD §6.1: QoQ, HoH growth),
+ * when both are complete; null otherwise (a partial period would compare unlike with like).
+ */
+export function revenueComparison(
+  close: CloseRow,
+  closes: readonly CloseRow[],
+  series: readonly FinancialRecord[],
+): RevenueComparison | null {
+  const period = closePeriodOf(close.period_type, close.period_start);
+  const previous = closePeriodOf(close.period_type, addMonths(period.startMonth, -1));
+  const previousClose = closes.find(
+    (row) => row.period_type === close.period_type && dateToMonthKey(row.period_start) === previous.startMonth,
+  );
+  const revenue = completePeriodRevenue(period, close, series);
+  const previousRevenue = completePeriodRevenue(previous, previousClose, series);
+  if (revenue === null || previousRevenue === null) return null;
+  return {
+    kind: close.period_type === "quarter" ? "QoQ" : "HoH",
+    previousLabel: previous.label,
+    previousRevenue,
+    revenue,
+    growthPct: growthPct(revenue, previousRevenue),
+  };
+}
+
 /** Closes newest first: later period end first; for the same end, the quarter before the half. */
 export function compareClosesNewestFirst(
   a: { period_end: string; period_type: ClosePeriodType; label: string },
@@ -449,6 +522,7 @@ export function buildCompanyDocumentsView(input: CompanyDocumentsInput): Company
       submittedMonths,
       allSubmitted: submittedMonths === counted.length,
       liveTotals: liveCloseTotals(close, company.reporting_start_month, input.financials),
+      revenueComparison: revenueComparison(close, input.closes, input.financials),
       computedTotals: confirmed ? parsePeriodTotals(close.computed_totals) : null,
       restatedTotals: hasRestatement(restated) ? restated : null,
       restatementReason: close.restatement_reason?.trim() || null,

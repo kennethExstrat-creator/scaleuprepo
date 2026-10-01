@@ -605,6 +605,8 @@ describe("loadC4WorkbookInput", () => {
       ["2026-06-01", "submitted", []],
     ]);
     expect(input.months[0].segments).toEqual({ [RETAIL]: 100_000, [SAAS]: 2_500 });
+    // Half-year closes only (their confirmed totals go under the half-year columns).
+    expect(input.closes?.map((close) => [close.label, close.status])).toEqual([["H1 2026", "confirmed"]]);
     // Both revenue breakdowns (BRD B30), retired ones included.
     expect(input.segments.map((s) => [s.name, s.kind, s.is_active])).toEqual([
       ["Retail", "company", true],

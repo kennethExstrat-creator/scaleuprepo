@@ -13,6 +13,7 @@ vi.mock("@/app/admin/cycles/actions", () => ({
   createFxRateAction: vi.fn(),
   updateFxRateAction: vi.fn(),
   deleteFxRateAction: vi.fn(),
+  updateCycleSettingsAction: vi.fn(),
 }));
 vi.mock("@/app/admin/settings/actions", () => ({ updateSettingsAction: vi.fn() }));
 vi.mock("@/components/ui/dialog", () => {

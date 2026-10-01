@@ -1,7 +1,7 @@
 import { ESCALATED_META, MISSING_META, OVERDUE_META, SUBMISSION_STATUS_META } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 
-import { plural, type CellState } from "../_lib/tracker-model";
+import { AMENDMENT_REQUESTED_LABEL, plural, type CellState } from "../_lib/tracker-model";
 import { CellChip, NarrativeDot, ThreadBadge } from "./tracker-cell";
 
 type LegendChip = { state: CellState; label: string; meaning: string; dimmed?: boolean };
@@ -17,6 +17,11 @@ export function TrackerLegend({ escalationDays }: { escalationDays: number }) {
       meaning: "sent back to the company",
     },
     { state: "approved", label: SUBMISSION_STATUS_META.approved.label, meaning: "approved and locked" },
+    {
+      state: "amendment_requested",
+      label: AMENDMENT_REQUESTED_LABEL,
+      meaning: "approved; the owner asked to amend it",
+    },
     { state: "overdue", label: `${OVERDUE_META.label} · 5d`, meaning: "days past the due date" },
     {
       state: "escalated",

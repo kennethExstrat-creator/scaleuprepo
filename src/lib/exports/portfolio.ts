@@ -3,19 +3,31 @@
 //
 // One row per company and month: company, funds, month, status, currency, FX rate, revenue, GP, GP %, NP,
 // NP %, cash, burn, runway, headcount, then the RM columns (amount × the month's FX rate to MYR; blank
-// where no rate is set). Written as an Excel workbook ("Portfolio data", "Revenue segments", "About") or
-// as RFC 4180 CSV (the "Portfolio data" table). "Revenue segments" (BRD B30) has one row per company,
-// month and segment with a figure: the company's own segments and ScaleUp's revenue lines. A month still
-// open for changes shows what the monthly form shows (segments.ts): the current segments' figures and,
-// when the company has segments of its own, revenue calculated from them.
+// where no rate is set). Written as an Excel workbook ("Portfolio data", "Revenue segments", "KPIs",
+// "Period closes", "About") or as RFC 4180 CSV (the "Portfolio data" table). "Revenue segments" (BRD B30)
+// has one row per company, month and segment with a figure: the company's own segments and ScaleUp's
+// revenue lines. A month still open for changes shows what the monthly form shows (segments.ts): the
+// current segments' figures and, when the company has segments of its own, revenue calculated from them.
+// "KPIs" (long format) has one row per company, month, KPI and dimension member with a value; "Period
+// closes" one row per quarter / half-year close of the companies and months exported, with the totals
+// stored at confirmation and the figures restated to the management accounts (BRD §6.1, §10).
 import ExcelJS from "exceljs";
 
-import { REVENUE_SEGMENT_KIND_META, SUBMISSION_STATUS_META, type RevenueSegmentKind } from "@/lib/constants";
+import { effectiveTotals, parsePeriodTotals, parseRestatedTotals, type RestatedTotals } from "@/components/documents/totals";
+import {
+  CLOSE_PERIOD_TYPE_LABELS,
+  KPI_VALUE_TYPE_LABELS,
+  PERIOD_CLOSE_STATUS_META,
+  REVENUE_SEGMENT_KIND_META,
+  SUBMISSION_STATUS_META,
+  type RevenueSegmentKind,
+} from "@/lib/constants";
 import { formatDateTime, toFiniteNumber } from "@/lib/format";
-import { gpPct, isCashflowPositive, npPct, runwayMonths } from "@/lib/metrics";
+import { gpPct, isCashflowPositive, npPct, runwayMonths, type PeriodTotals } from "@/lib/metrics";
 import { dateToMonthKey, monthLabel, parseInstant, parseMonthKey, type MonthKey } from "@/lib/periods";
+import type { Json } from "@/lib/supabase/database.types";
 import { segmentKind } from "@/lib/types/domain";
-import type { SubmissionStatus } from "@/lib/types/enums";
+import type { ClosePeriodType, KpiValueType, PeriodCloseStatus, SubmissionStatus } from "@/lib/types/enums";
 
 import { roundTo, toCsv, type CsvValue } from "./csv";
 import { ENTERED_EARLIER_TOTAL_NOTE, isOpenForChanges, shownRevenueTotal } from "./segments";
@@ -294,6 +306,185 @@ export function buildPortfolioSegmentRows(
 }
 
 // ---------------------------------------------------------------------------------------------
+// Company KPIs (long format)
+// ---------------------------------------------------------------------------------------------
+
+/** A company KPI (a company_kpis row: the columns the extract uses). */
+export type PortfolioKpi = {
+  id: string;
+  company_id: string;
+  name: string;
+  unit: string | null;
+  value_type: KpiValueType;
+  sort_order: number;
+};
+
+/** A dimension member of a KPI (e.g. an outlet). */
+export type PortfolioKpiMember = { id: string; name: string; sort_order: number };
+
+/** A month's KPI value (a submission_kpi_values row). */
+export type PortfolioKpiValue = {
+  submission_id: string;
+  kpi_id: string;
+  dimension_member_id: string | null;
+  value_number: number | null;
+  value_text: string | null;
+  value_bool: boolean | null;
+};
+
+/** One company, month, KPI (and dimension member) with a value. */
+export type PortfolioKpiRow = {
+  companyId: string;
+  company: string;
+  funds: string;
+  month: MonthKey;
+  status: SubmissionStatus;
+  kpi: string;
+  member: string | null;
+  unit: string | null;
+  valueType: KpiValueType;
+  /** Numbers as numbers (percent KPIs as entered: 12.5 means 12.5 %), Yes / No, or text. */
+  value: number | string;
+  kpiOrder: number;
+  memberOrder: number;
+};
+
+const NUMBER_KPI_TYPES: ReadonlySet<KpiValueType> = new Set<KpiValueType>(["number", "integer", "currency", "percent"]);
+
+function kpiValue(type: KpiValueType, value: PortfolioKpiValue): number | string | null {
+  if (NUMBER_KPI_TYPES.has(type)) return toFiniteNumber(value.value_number);
+  if (type === "boolean") return typeof value.value_bool === "boolean" ? (value.value_bool ? "Yes" : "No") : null;
+  const text = value.value_text?.trim();
+  return text ? text : null;
+}
+
+/**
+ * The KPI values of the extract's months (`rows`), sorted by company, month, KPI order and name, then
+ * member order and name. Values of KPIs or members that are not loaded, and empty values, are left out.
+ */
+export function buildPortfolioKpiRows(
+  rows: readonly PortfolioRow[],
+  kpis: readonly PortfolioKpi[],
+  members: readonly PortfolioKpiMember[],
+  values: readonly PortfolioKpiValue[],
+): PortfolioKpiRow[] {
+  const bySubmission = new Map<string, PortfolioRow>();
+  for (const row of rows) if (row.submissionId) bySubmission.set(row.submissionId, row);
+  const kpiById = new Map(kpis.map((kpi) => [kpi.id, kpi]));
+  const memberById = new Map(members.map((member) => [member.id, member]));
+  const result: PortfolioKpiRow[] = [];
+  for (const value of values) {
+    const row = bySubmission.get(value.submission_id);
+    const kpi = kpiById.get(value.kpi_id);
+    if (!row || !kpi || kpi.company_id !== row.companyId) continue;
+    const member = value.dimension_member_id ? memberById.get(value.dimension_member_id) : undefined;
+    if (value.dimension_member_id && !member) continue;
+    const shown = kpiValue(kpi.value_type, value);
+    if (shown === null) continue;
+    result.push({
+      companyId: row.companyId,
+      company: row.company,
+      funds: row.funds,
+      month: row.month,
+      status: row.status,
+      kpi: kpi.name.trim(),
+      member: member ? member.name.trim() : null,
+      unit: kpi.unit?.trim() || null,
+      valueType: kpi.value_type,
+      value: shown,
+      kpiOrder: kpi.sort_order,
+      memberOrder: member?.sort_order ?? 0,
+    });
+  }
+  return result.sort(
+    (a, b) =>
+      compareNames(a.company, b.company) ||
+      a.companyId.localeCompare(b.companyId) ||
+      a.month.localeCompare(b.month) ||
+      a.kpiOrder - b.kpiOrder ||
+      compareNames(a.kpi, b.kpi) ||
+      a.memberOrder - b.memberOrder ||
+      compareNames(a.member ?? "", b.member ?? ""),
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Period closes (quarter and half-year totals, restated to the management accounts)
+// ---------------------------------------------------------------------------------------------
+
+/** A period_closes row (the columns the extract uses). */
+export type PortfolioClose = {
+  id: string;
+  company_id: string;
+  period_type: ClosePeriodType;
+  period_start: string;
+  period_end: string;
+  label: string;
+  status: PeriodCloseStatus;
+  confirmed_at: string | null;
+  computed_totals: Json | null;
+  restated_totals: Json | null;
+  restatement_reason: string | null;
+};
+
+/** One quarter or half-year close of a company. */
+export type PortfolioCloseRow = {
+  companyId: string;
+  company: string;
+  funds: string;
+  label: string;
+  periodType: ClosePeriodType;
+  periodEnd: string;
+  status: PeriodCloseStatus;
+  confirmedAt: string | null;
+  /** The totals stored at confirmation, from the submitted and approved months (null while open). */
+  computed: PeriodTotals | null;
+  /** The figures restated to the management accounts (null when none). */
+  restated: RestatedTotals | null;
+  /** The confirmed figures: computed, with the restated ones in their place. */
+  confirmed: PeriodTotals | null;
+  reason: string | null;
+};
+
+/**
+ * The closes of the companies in `rows` (those the extract shows), sorted by company, then period end
+ * (quarters before the half-year ending the same day).
+ */
+export function buildPortfolioCloseRows(rows: readonly PortfolioRow[], closes: readonly PortfolioClose[]): PortfolioCloseRow[] {
+  const companies = new Map<string, { company: string; funds: string }>();
+  for (const row of rows) companies.set(row.companyId, { company: row.company, funds: row.funds });
+  const result: PortfolioCloseRow[] = [];
+  for (const close of closes) {
+    const company = companies.get(close.company_id);
+    if (!company) continue;
+    const computed = close.status === "confirmed" ? parsePeriodTotals(close.computed_totals) : null;
+    const restated = parseRestatedTotals(close.restated_totals);
+    const hasRestated = restated !== null && Object.keys(restated).length > 0;
+    result.push({
+      companyId: close.company_id,
+      company: company.company,
+      funds: company.funds,
+      label: close.label,
+      periodType: close.period_type,
+      periodEnd: close.period_end,
+      status: close.status,
+      confirmedAt: close.status === "confirmed" ? close.confirmed_at : null,
+      computed,
+      restated: hasRestated ? restated : null,
+      confirmed: computed ? effectiveTotals(computed, hasRestated ? restated : null) : null,
+      reason: close.restatement_reason?.trim() || null,
+    });
+  }
+  return result.sort(
+    (a, b) =>
+      compareNames(a.company, b.company) ||
+      a.companyId.localeCompare(b.companyId) ||
+      a.periodEnd.localeCompare(b.periodEnd) ||
+      (a.periodType === b.periodType ? 0 : a.periodType === "quarter" ? -1 : 1),
+  );
+}
+
+// ---------------------------------------------------------------------------------------------
 // Columns (shared by CSV and Excel)
 // ---------------------------------------------------------------------------------------------
 
@@ -408,6 +599,106 @@ export const PORTFOLIO_SEGMENT_COLUMNS: readonly ExportColumn<PortfolioSegmentRo
   { header: "Amount (RM)", width: 14, csv: (r) => round(r.amountRm, 2), xlsx: (r) => r.amountRm, format: "money" },
 ];
 
+/** Columns of the "KPIs" sheet: one row per company, month, KPI and member with a value. */
+export const PORTFOLIO_KPI_COLUMNS: readonly ExportColumn<PortfolioKpiRow>[] = [
+  { header: "Company", width: 26, csv: (r) => r.company, xlsx: (r) => r.company },
+  { header: "Funds", width: 11, csv: (r) => r.funds, xlsx: (r) => r.funds },
+  { header: "Month", width: 11, csv: (r) => r.month, xlsx: (r) => excelDate(r.month), format: "month" },
+  {
+    header: "Status",
+    width: 18,
+    csv: (r) => SUBMISSION_STATUS_META[r.status].label,
+    xlsx: (r) => SUBMISSION_STATUS_META[r.status].label,
+  },
+  { header: "KPI", width: 28, csv: (r) => r.kpi, xlsx: (r) => r.kpi },
+  { header: "Member", width: 20, csv: (r) => r.member, xlsx: (r) => r.member },
+  { header: "Unit", width: 10, csv: (r) => r.unit, xlsx: (r) => r.unit },
+  {
+    header: "Type",
+    width: 12,
+    csv: (r) => KPI_VALUE_TYPE_LABELS[r.valueType],
+    xlsx: (r) => KPI_VALUE_TYPE_LABELS[r.valueType],
+  },
+  {
+    header: "Value",
+    width: 14,
+    csv: (r) => (typeof r.value === "number" ? roundTo(r.value, 4) : r.value),
+    xlsx: (r) => r.value,
+    format: "decimal",
+  },
+];
+
+const totalsColumn = (
+  header: string,
+  pick: (row: PortfolioCloseRow) => PeriodTotals | RestatedTotals | null,
+  key: keyof PeriodTotals & keyof RestatedTotals,
+  format: NumberFormatName,
+): ExportColumn<PortfolioCloseRow> => {
+  const value = (row: PortfolioCloseRow): number | null => {
+    const totals = pick(row);
+    const raw = totals ? (totals as Partial<Record<string, number | null>>)[key] : null;
+    return toFiniteNumber(raw ?? null);
+  };
+  const isPct = key === "gp_pct" || key === "np_pct";
+  return {
+    header,
+    width: 14,
+    csv: (row) => round(value(row), isPct ? 2 : 4),
+    xlsx: (row) => (isPct ? fraction(value(row)) : value(row)),
+    format,
+  };
+};
+
+/** Columns of the "Period closes" sheet: computed totals, then the restated figures and the confirmed ones. */
+export const PORTFOLIO_CLOSE_COLUMNS: readonly ExportColumn<PortfolioCloseRow>[] = [
+  { header: "Company", width: 26, csv: (r) => r.company, xlsx: (r) => r.company },
+  { header: "Funds", width: 11, csv: (r) => r.funds, xlsx: (r) => r.funds },
+  { header: "Period", width: 10, csv: (r) => r.label, xlsx: (r) => r.label },
+  {
+    header: "Type",
+    width: 11,
+    csv: (r) => CLOSE_PERIOD_TYPE_LABELS[r.periodType],
+    xlsx: (r) => CLOSE_PERIOD_TYPE_LABELS[r.periodType],
+  },
+  {
+    header: "Status",
+    width: 12,
+    csv: (r) => PERIOD_CLOSE_STATUS_META[r.status].label,
+    xlsx: (r) => PERIOD_CLOSE_STATUS_META[r.status].label,
+  },
+  {
+    header: "Confirmed",
+    width: 18,
+    csv: (r) => (r.confirmedAt ? formatDateTime(r.confirmedAt) : null),
+    xlsx: (r) => (r.confirmedAt ? formatDateTime(r.confirmedAt) : null),
+  },
+  {
+    header: "Months",
+    width: 8,
+    csv: (r) => r.computed?.months_count ?? null,
+    xlsx: (r) => r.computed?.months_count ?? null,
+    format: "integer",
+  },
+  totalsColumn("Revenue (calculated)", (r) => r.computed, "revenue_total", "money"),
+  totalsColumn("Gross profit (calculated)", (r) => r.computed, "gross_profit", "money"),
+  totalsColumn("GP % (calculated)", (r) => r.computed, "gp_pct", "pct"),
+  totalsColumn("Net profit (calculated)", (r) => r.computed, "net_profit", "money"),
+  totalsColumn("NP % (calculated)", (r) => r.computed, "np_pct", "pct"),
+  totalsColumn("Cash in bank, period end (calculated)", (r) => r.computed, "cash_in_bank", "money"),
+  totalsColumn("Average monthly burn (calculated)", (r) => r.computed, "avg_burn_rate", "money"),
+  totalsColumn("Headcount FT (calculated)", (r) => r.computed, "headcount_ft", "integer"),
+  totalsColumn("Headcount PT (calculated)", (r) => r.computed, "headcount_pt", "integer"),
+  totalsColumn("Revenue (restated)", (r) => r.restated, "revenue_total", "money"),
+  totalsColumn("Gross profit (restated)", (r) => r.restated, "gross_profit", "money"),
+  totalsColumn("Net profit (restated)", (r) => r.restated, "net_profit", "money"),
+  totalsColumn("Cash in bank (restated)", (r) => r.restated, "cash_in_bank", "money"),
+  totalsColumn("Average monthly burn (restated)", (r) => r.restated, "avg_burn_rate", "money"),
+  totalsColumn("Revenue (confirmed)", (r) => r.confirmed, "revenue_total", "money"),
+  totalsColumn("Gross profit (confirmed)", (r) => r.confirmed, "gross_profit", "money"),
+  totalsColumn("Net profit (confirmed)", (r) => r.confirmed, "net_profit", "money"),
+  { header: "Restatement reason", width: 40, csv: (r) => r.reason, xlsx: (r) => r.reason },
+];
+
 /** The extract as CSV (UTF-8 BOM, CRLF, RFC 4180). */
 export function portfolioCsv(rows: readonly PortfolioRow[]): string {
   return toCsv(
@@ -489,14 +780,19 @@ function writeDataSheet<R>(
   applyPrintSetup(sheet, { titleRows: "1:1", titleColumns: "A:A", footer: name });
 }
 
+/** The extract's KPI values and period closes (the Excel "KPIs" and "Period closes" sheets). */
+export type PortfolioDetails = { kpiRows: readonly PortfolioKpiRow[]; closeRows: readonly PortfolioCloseRow[] };
+
 /**
  * Excel workbook: "Portfolio data" (header row, filters, frozen panes), "Revenue segments" when
- * `segmentRows` is given (BRD B30), and "About".
+ * `segmentRows` is given (BRD B30), "KPIs" and "Period closes" when `extraSheets` are given (BRD §10: all
+ * approved figures by company and period), and "About".
  */
 export function buildPortfolioWorkbook(
   rows: readonly PortfolioRow[],
   meta: PortfolioExportMeta,
   segmentRows?: readonly PortfolioSegmentRow[] | null,
+  extraSheets?: PortfolioDetails | null,
 ): ExcelJS.Workbook {
   const workbook = new ExcelJS.Workbook();
   setWorkbookProperties(workbook, {
@@ -508,6 +804,14 @@ export function buildPortfolioWorkbook(
   if (segmentRows) {
     writeDataSheet(workbook, "Revenue segments", PORTFOLIO_SEGMENT_COLUMNS, segmentRows, {
       emptyNote: "None of these months has revenue segment figures.",
+    });
+  }
+  if (extraSheets) {
+    writeDataSheet(workbook, "KPIs", PORTFOLIO_KPI_COLUMNS, extraSheets.kpiRows, {
+      emptyNote: "None of these months has company KPI values.",
+    });
+    writeDataSheet(workbook, "Period closes", PORTFOLIO_CLOSE_COLUMNS, extraSheets.closeRows, {
+      emptyNote: "None of these companies has a quarter or half-year close in these months.",
     });
   }
 
@@ -526,6 +830,12 @@ export function buildPortfolioWorkbook(
     ],
     ["Rows", String(rows.length)],
     ...(segmentRows ? [["Revenue segment rows", String(segmentRows.length)] satisfies [string, string]] : []),
+    ...(extraSheets
+      ? [
+          ["KPI rows", String(extraSheets.kpiRows.length)] satisfies [string, string],
+          ["Period closes", String(extraSheets.closeRows.length)] satisfies [string, string],
+        ]
+      : []),
   ];
   details.forEach(([label, value], index) => {
     const row = about.getRow(index + 3);
@@ -544,6 +854,12 @@ export function buildPortfolioWorkbook(
     ...(segmentRows
       ? [
           "Revenue segments: one row per company, month and segment with a figure. A company's own revenue segments add up to its total revenue; ScaleUp revenue lines are set by ScaleUp and need not add up. Submitted months keep the segment names they were reported with (In use = No longer used).",
+        ]
+      : []),
+    ...(extraSheets
+      ? [
+          "KPIs: one row per company, month, KPI and dimension member with a value (percentages as entered: 12.5 means 12.5%; Yes / No for yes-or-no KPIs), for the same months as the portfolio data.",
+          "Period closes: the quarter and half-year closes of these companies that overlap the months exported. Calculated = the totals stored when the close was confirmed (revenue and profit summed, cash and headcount at period end, burn averaged), from the submitted and approved months; restated = the figures the company restated to its management accounts (with the reason); confirmed = calculated with the restated figures in their place. Open closes have no stored totals yet.",
         ]
       : []),
     "Months are calendar months (Malaysia time). Figures come from the monthly updates on the platform and are never retyped.",

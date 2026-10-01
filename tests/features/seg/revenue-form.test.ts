@@ -116,7 +116,7 @@ describe("monthly form: owner editing an open month with both breakdowns", () =>
   });
 
   it("asks for ScaleUp's revenue lines separately, with the note that they need not add up", () => {
-    expect(text(lines)).toContain("ScaleUp revenue lines");
+    expect(text(lines)).toContain("ScaleUp Required Revenue Segment");
     expect(text(lines)).toContain(SCALEUP_LINES_NOTE);
     expect(lines).toContain(`id="sf-segment-${IDS.aonePay}"`);
     expect(lines).not.toContain(IDS.legacyLine); // inactive

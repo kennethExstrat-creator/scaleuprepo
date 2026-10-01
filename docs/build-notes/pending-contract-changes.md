@@ -152,3 +152,78 @@ Applied to the contract (`docs/ARCHITECTURE.md`, items marked "(B30)", §7 chang
   blocks submit with sum_mismatch; also clear retired-segment figures on submit. New migration needed.
 - 2026-10-01 ~15:15 MYT: in parallel with the integrator, launched wf_8272a216-c3b: (a) E2E QA in isolated e2e/ folder (Playwright; test accounts e2e.*@example.com + "E2E Test Co (automated)", cleaned up after; report-only),
   (b) DB follow-up: NEW migration 20261001000300_revenue_total_from_segments.sql (DB recomputes revenue_total from company segments for editable months; p_expected_ids optimistic check) — NOT pushed yet.
+
+## TUNING QUEUE (user requests to apply right after the build — 2026-10-01)
+1. [partly done 15:30] Revenue block names (user wording, Title Case): company-defined = "Self Defined Revenue Segment",
+   ScaleUp-defined = "ScaleUp Required Revenue Segment". DONE in the monthly form (src/components/submission-form/revenue.tsx,
+   inline strings) + tests/features/seg/revenue-form.test.ts. TODO: move into REVENUE_SEGMENT_KIND_META (label/plural) and apply
+   everywhere (portal segments page + nav, admin company tab label, review page groups, comment target labels, exports
+   sheet/column headers) + update tests (m1 tabs-and-labels, m6 target-labels/comparison/render, m9 portfolio/routes, seg render).
+2. [SPEC FINAL 16:00] Financials block labels (template v1 data fix via NEW migration — bypass/disable the template guard trigger for the
+   one-off update, no real submissions exist yet — plus seed.sql, SYSTEM_FIELD_LABELS and tests): section title "Financials of The Month";
+   fields "Total Revenue (of the month)", "Gross Profit (of the month)", "Net Profit (of the month)", "Cash In Bank (month end)",
+   "Burn Rate (per month)", "Full-Time Headcount", "Part-Time Headcount" (section title "Headcount" unchanged).
+   (superseded earlier note:) Financial field labels in Title Case + "(of the month)": Gross Profit (of the month), Net Profit (of the month),
+   Cash In Bank (month end), Burn Rate (per month) [+ Total Revenue / headcount? asked user]. Labels live in template_fields
+   (template v1 published; Jul–Sep periods pinned to v1) → pre-launch data fix via NEW migration updating v1 labels (guard
+   trigger!), seed.sql + SYSTEM_FIELD_LABELS for consistency, update tests asserting "Gross profit is required." etc.
+3. KPIs follow the B30 segments concept (user, 2026-10-01 15:40) → BRD B31 to add when implemented (not before the critic runs):
+   - "ScaleUp Required KPI" = today's company_kpis (admin-defined; required; dimensions + half-yearly allowed).
+   - "Self Defined KPI" = owner-defined on a new portal page (e.g. /portal/[companyId]/kpis): reused monthly; changes warn about
+     comparability; rename = new series (retire + create when used in submitted months); submitted months keep names/values.
+   - Proposed defaults (asked user to confirm): self-defined KPIs required while active; monthly + single value only (no dimensions,
+     no half-yearly); types number/integer/currency/percent/boolean.
+   - Implementation mirrors B30: company_kpis.kind + retired_at, set_company_kpis RPC (+ p_expected_ids), RLS (direct writes kind
+     scaleup only), save_submission_values active-only, validation both kinds, data layer split, form two blocks, portal page + nav,
+     admin KPIs tab relabel + read-only self-defined panel, review groups, exports (KPIs sheet by kind). New migration + tests.
+
+## B30 hardening — DB follow-up (wf_8272a216-c3b (b), 2026-10-01 15:40 MYT)
+- H1 NEW migration `supabase/migrations/20261001000300_revenue_total_from_segments.sql` — **TO PUSH** (lead: `npm run db:push`).
+  `tests/db` 320/320 PASS (new `tests/db/revenue-total-b30.test.ts`, 13 tests); `npm run db:verify` PASS on PG 17.6
+  (11 deployed, 1 pending, 21 passed, 2 data warnings, rolled back). Replaces `save_submission_values` and
+  `set_company_revenue_segments` (the 0200 bodies + additions marked "(B30 hardening)"; every existing check unchanged) and adds
+  internal `private.set_revenue_total_from_segments(uuid)`. Open months' `revenue_total` = sum of the amounts present for the
+  ACTIVE company segments (removed when none): after a save that changes company-segment figures (kept when the save sends
+  `revenue_total` itself, or when the month had a total but no company-segment figures before that save), and in every open
+  month whose figures `set_company_revenue_segments` moves or clears. No own segments → total kept; submitted / approved months
+  never change. `set_company_revenue_segments(uuid, jsonb, p_expected_ids uuid[] default null)`: P0001 "Your revenue segments
+  were changed by someone else. Reload the page to see the latest version." when the ids (as a set) are no longer the active
+  company segments (checked under the lock); dropped + recreated with the same privileges. No data changed on apply.
+- H2 OPEN (lead) — types NOT regenerated: `npm run db:types` adds only `p_expected_ids?: string[]` to
+  `set_company_revenue_segments.Args`, which breaks the exact pin at `tests/db/types.typecheck.ts:64` (TS2344, so `npm run
+  typecheck` and `next build` fail). Do both together: `npm run db:types` + line 64 →
+  `{ Args: { p_company_id: string; p_expected_ids?: string[]; p_segments: Json }; Returns: Tables<"revenue_segments">[] }`
+  (verified in a sandbox). Until then `gen-db-types --check` reports out of date (by that one line).
+- H3 OPEN (integrator) — pass `p_expected_ids` (the ids of `config.companySegments` the editor opened with) from
+  `setCompanyRevenueSegments`, the portal segments action and the admin on-behalf edit; keep the app's `sameSegmentList` check
+  (the database compares ids only: in-place renames and reorders keep their ids). ARCHITECTURE.md text: see the step report.
+- H4 NOTE — a later migration that replaces `save_submission_values` (e.g. TUNING QUEUE 3, self-defined KPIs) or
+  `set_company_revenue_segments` must start from the 20261001000300 bodies, or the recalculation / `p_expected_ids` check is
+  lost (`tests/db/revenue-total-b30.test.ts` catches it).
+- 2026-10-01 15:55 MYT: pushed 20261001000300_revenue_total_from_segments.sql (DB now recomputes revenue_total; p_expected_ids live).
+  STILL TO APPLY in app (round 1): npm run db:types + tests/db/types.typecheck.ts line ~64 pin → `p_expected_ids?: string[]`;
+  setCompanyRevenueSegments(..., { expectedIds }) + pass ids from portal segments action and admin on-behalf action.
+- BRD §13 now has B31–B40 (KPI two kinds; module-settled rules; 2FA switch removal B40 "Confirm"; due-day setting B35 "Confirm").
+- supabase/README.md updated (3 migration rows; B28/B29/B30 rules). E2E suite: e2e/ (own deps; `cd e2e && npx playwright test` against :3001).
+- 2026-10-01 16:10: user decided KPI defaults — ONE default ScaleUp Required KPI "Active Customers" for every company (admin default setting,
+  customisable per company), owners get an "Add KPI" button for Self Defined KPIs. BRD B31 rewritten; round-1 script updated
+  (docs/build-notes/workflows/tuning-round-1.js). Demo company's extra KPI "Orders" is demo data only.
+
+## RESUME POINT 2026-10-01 16:15 MYT (user going offline)
+- Main build wf_24476f44-93d: only the Gap fixer left; it was in final verification. It CREATED migration
+  20261001000500_cycle_settings_and_mfa_guard.sql (NOT pushed) and regenerated types. If the run died offline: run
+  `npm run typecheck`, `npm test`, `npx eslint src tests scripts`, `npm run build` yourself and fix what is left.
+- Then: `npm run db:verify` → push 000500 (supabase db push --db-url "$SUPABASE_DB_URL?sslmode=verify-full&sslrootcert=<copy of
+  supabase/certs/prod-ca-2021.crt in a path without spaces>" --yes) → launch docs/build-notes/workflows/tuning-round-1.js
+  (Workflow scriptPath, args {concurrency: 4}); its migrations: 000400 labels, 000600 kpis_b31 → push after it finishes → re-run e2e.
+- Dev server :3001 is detached (nohup); caffeinate until ~19:30. Preview to move to :3000 at handover.
+
+## STATE 2026-10-01 16:35 MYT — PHASE 1 BUILD COMPLETE
+- wf_24476f44-93d finished (19 agents, 0 errors). Final verification by the gap fixer: typecheck 0 errors, 124 files / 1,703 tests
+  pass, eslint clean, production build passes (46 routes). E2E: 10/10 flows pass (plus B21 check).
+- Deployed to Supabase: migrations 20260930000100–000900, 20261001000100, 000200, 000300, 000500 (all pushed; db:verify PASS each time).
+- Gap fixer added: scripts/import-history.ts (historical workbook import, dry-run first; needs per-company data), on-behalf segment
+  editing for admins, earlier-figures display, amendment requests visible to ScaleUp, QoQ/HoH, KPIs + Period closes sheets in the
+  portfolio export, Fund Admin cycle settings (set_cycle_settings), 2FA cannot be switched off, docs/backups-runbook.md.
+- NEXT: launch docs/build-notes/workflows/tuning-round-1.js (labels + segment names + KPI two kinds + expectedIds + e2e re-run),
+  then push 000400 and 000600, move preview to :3000, remove demo data before launch. Open ops item: enable PITR/off-site backups.

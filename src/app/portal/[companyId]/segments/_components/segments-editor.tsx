@@ -17,6 +17,7 @@ import {
   SaveIcon,
   Trash2Icon,
   Undo2Icon,
+  UserCogIcon,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useId, useMemo, useRef, useState, useTransition } from "react";
@@ -40,7 +41,7 @@ import {
   type RevenueSegmentRow,
 } from "@/lib/types/domain";
 import { cn } from "@/lib/utils";
-import { saveRevenueSegmentsAction, type SavedRevenueSegments } from "../actions";
+import { saveRevenueSegmentsAction, type SavedRevenueSegments, type SaveRevenueSegmentsInput } from "../actions";
 import {
   changeCountsText,
   describeChanges,
@@ -73,10 +74,33 @@ export type SegmentsEditorProps = {
   usage: Record<string, SegmentUsage>;
   /** Months not submitted yet ('YYYY-MM'): they follow the segments saved here. */
   openMonths: string[];
+  /**
+   * (Optional) Who is editing: the company owner ("owner", the default) or ScaleUp on the owner's behalf
+   * ("scaleup": the ScaleUp company page; the wording speaks about the company instead of "your").
+   */
+  audience?: SegmentsEditorAudience;
+  /**
+   * (Optional) The Server Action that saves the list: the owner's `saveRevenueSegmentsAction` by default;
+   * the ScaleUp company page passes `saveCompanySegmentsOnBehalfAction` (Super Admin / Fund Admin, audited
+   * as on behalf). Both take the same input.
+   */
+  saveAction?: (input: SaveRevenueSegmentsInput) => Promise<ActionResult<SavedRevenueSegments>>;
 };
 
+export type SegmentsEditorAudience = "owner" | "scaleup";
+
 /** The editor; render it with `key={segmentsKey(current)}` so a save starts it again from the saved list. */
-export function SegmentsEditor({ companyId, companyName, current, hasRetired, usage, openMonths }: SegmentsEditorProps) {
+export function SegmentsEditor({
+  companyId,
+  companyName,
+  current,
+  hasRetired,
+  usage,
+  openMonths,
+  audience = "owner",
+  saveAction = saveRevenueSegmentsAction,
+}: SegmentsEditorProps) {
+  const onBehalf = audience === "scaleup";
   const router = useRouter();
   const baseId = useId();
   const [items, setItems] = useState<EditorItem[]>(() => toEditorItems(current));
@@ -211,7 +235,7 @@ export function SegmentsEditor({ companyId, companyName, current, hasRetired, us
   async function submit(): Promise<string | null> {
     let result: ActionResult<SavedRevenueSegments>;
     try {
-      result = await saveRevenueSegmentsAction({
+      result = await saveAction({
         companyId,
         // What this editor started from: refused if someone saved other segments since.
         expected: current.map((segment) => ({ id: segment.id, name: segment.name })),
@@ -225,7 +249,9 @@ export function SegmentsEditor({ companyId, companyName, current, hasRetired, us
       description:
         result.data.segments.length === 0
           ? "Monthly updates now ask for total revenue directly."
-          : "Monthly updates not yet submitted use these segments.",
+          : onBehalf
+            ? `${companyName}'s monthly updates not yet submitted use these segments.`
+            : "Monthly updates not yet submitted use these segments.",
     });
     return null;
   }
@@ -268,7 +294,15 @@ export function SegmentsEditor({ companyId, companyName, current, hasRetired, us
     <Card>
       <CardHeader>
         <CardTitle>
-          <h2>{firstSetUp ? "Set up your revenue segments" : "Your revenue segments"}</h2>
+          <h2>
+            {onBehalf
+              ? firstSetUp
+                ? `Set up ${companyName}'s revenue segments`
+                : `${companyName}'s revenue segments`
+              : firstSetUp
+                ? "Set up your revenue segments"
+                : "Your revenue segments"}
+          </h2>
         </CardTitle>
         <CardDescription>
           {firstSetUp
@@ -281,7 +315,8 @@ export function SegmentsEditor({ companyId, companyName, current, hasRetired, us
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        {firstSetUp ? <FirstSetUpNote openMonths={openMonths} /> : null}
+        {onBehalf ? <OnBehalfNote companyName={companyName} /> : null}
+        {firstSetUp ? <FirstSetUpNote openMonths={openMonths} onBehalf={onBehalf} /> : null}
 
         {formError ? (
           <div ref={errorBox} className="flex scroll-mt-20 flex-col gap-2">
@@ -467,7 +502,7 @@ export function SegmentsEditor({ companyId, companyName, current, hasRetired, us
       <ConfirmDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
-        title="Change your revenue segments?"
+        title={onBehalf ? `Change ${companyName}'s revenue segments?` : "Change your revenue segments?"}
         description={<ChangeSummary changes={changes} usage={usage} remaining={items.length} openMonths={openMonths} />}
         confirmLabel="Save changes"
         onConfirm={async () => {
@@ -489,25 +524,48 @@ function changeCountText(changes: CompanySegmentChanges): string {
   return count === 1 ? "1 unsaved change." : `${count} unsaved changes.`;
 }
 
+/** ScaleUp staff editing a company's own segments: they act for the owner, and it is recorded. */
+function OnBehalfNote({ companyName }: { companyName: string }) {
+  return (
+    <div className="flex items-start gap-3 rounded-lg border border-dashed bg-muted/30 p-3 text-sm">
+      <UserCogIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      <p className="text-foreground/85">
+        You are changing {companyName}&apos;s own segments on the owner&apos;s behalf. The audit log records the change
+        as made on their behalf; let the owner know, as they normally manage these segments in the company portal.
+      </p>
+    </div>
+  );
+}
+
 /** What the first set-up means for the monthly updates. */
-function FirstSetUpNote({ openMonths }: { openMonths: string[] }) {
+function FirstSetUpNote({ openMonths, onBehalf }: { openMonths: string[]; onBehalf: boolean }) {
   const months = openMonthsText(openMonths);
   return (
     <div className="flex items-start gap-3 rounded-lg border bg-muted/40 p-3 text-sm">
       <ListPlusIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       <ul className="flex list-disc flex-col gap-1 pl-4 text-foreground/85">
         <li>
-          Your segments must add up to total revenue: each month you enter revenue per segment, and total revenue is
-          calculated from them.
+          {onBehalf
+            ? "The segments must add up to total revenue: each month the company enters revenue per segment, and total " +
+              "revenue is calculated from them."
+            : "Your segments must add up to total revenue: each month you enter revenue per segment, and total revenue " +
+              "is calculated from them."}
         </li>
         <li>
-          They are reused every month, so your figures stay comparable over time. Change them only when the way you
-          report revenue changes.
+          {onBehalf
+            ? "They are reused every month, so the figures stay comparable over time. Change them only when the way the " +
+              "company reports revenue changes."
+            : "They are reused every month, so your figures stay comparable over time. Change them only when the way " +
+              "you report revenue changes."}
         </li>
         <li>
           {months
-            ? `Once saved, the months you haven't submitted yet (${months}) ask for revenue per segment.`
-            : "Once saved, your next monthly update asks for revenue per segment."}{" "}
+            ? onBehalf
+              ? `Once saved, the months not submitted yet (${months}) ask for revenue per segment.`
+              : `Once saved, the months you haven't submitted yet (${months}) ask for revenue per segment.`
+            : onBehalf
+              ? "Once saved, the next monthly update asks for revenue per segment."
+              : "Once saved, your next monthly update asks for revenue per segment."}{" "}
           Months already submitted are not changed.
         </li>
       </ul>

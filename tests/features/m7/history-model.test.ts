@@ -25,6 +25,26 @@ describe("buildHistoryRows", () => {
   it("is empty without submissions", () => {
     expect(buildHistoryRows([], series, "MYR")).toEqual([]);
   });
+
+  it("shows an open month's total revenue as the sum of the company's own segments (BRD B30)", () => {
+    // Aug (sent back) still stores 90,000, but after the owner removed a segment its figures add up to 60,000.
+    const openRevenue = {
+      companySegmentIds: ["seg-retail", "seg-web"],
+      amounts: {
+        s8: { "seg-retail": 40_000, "seg-web": 20_000, "line-aone": 5_000 },
+        s7: { "seg-retail": 1 },
+      },
+    };
+    const rows = buildHistoryRows(submissions, series, "MYR", openRevenue);
+    expect(rows.map((row) => [row.id, row.revenue])).toEqual([
+      ["s9", null], // nothing yet
+      ["s8", 60_000], // the segments in use; ScaleUp lines never count
+      ["s7", 120_000], // approved: the stored total, always
+    ]);
+    // No segment figure yet: the stored total stays; no segments of its own: always the stored total.
+    expect(buildHistoryRows(submissions, series, "MYR", { ...openRevenue, amounts: {} })[1].revenue).toBe(90_000);
+    expect(buildHistoryRows(submissions, series, "MYR", { companySegmentIds: [], amounts: openRevenue.amounts })[1].revenue).toBe(90_000);
+  });
 });
 
 describe("historyCounts / historyRange", () => {

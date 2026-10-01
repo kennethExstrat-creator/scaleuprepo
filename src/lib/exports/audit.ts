@@ -47,6 +47,8 @@ export const AUDIT_ACTION_META: Record<string, AuditActionMeta> = {
   resolve: { label: "Thread resolved", tone: "neutral" },
   unresolve: { label: "Thread reopened", tone: "neutral" },
   open_period: { label: "Month opened early", tone: "neutral" },
+  // scripts/import-history.ts: months before the reporting start month, from the historical workbooks (BRD B3).
+  import: { label: "Imported (history)", tone: "neutral" },
   publish: { label: "Template published", tone: "neutral" },
   status_change: { label: "Company status changed", tone: "warning" },
   accept_terms: { label: "Terms accepted", tone: "neutral" },
@@ -63,7 +65,16 @@ export const AUDIT_ACTION_GROUPS: readonly { label: string; actions: readonly st
   { label: "Record changes", actions: ["insert", "update", "delete"] },
   {
     label: "Monthly updates",
-    actions: ["submit", "request_changes", "approve", "reopen", "request_amendment", "extend_due_date", "open_period"],
+    actions: [
+      "submit",
+      "request_changes",
+      "approve",
+      "reopen",
+      "request_amendment",
+      "extend_due_date",
+      "open_period",
+      "import",
+    ],
   },
   { label: "Period closes and comments", actions: ["confirm", "resolve", "unresolve"] },
   { label: "Setup", actions: ["publish", "status_change"] },

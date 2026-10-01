@@ -216,6 +216,7 @@ describe("cellStateOf / cellLabel / matchesStatusFilter", () => {
     expect(cellLabel("submitted", 0, "submitted")).toBe("Submitted");
     expect(cellLabel("changes_requested", 0, "changes_requested")).toBe("Changes requested");
     expect(cellLabel("approved", 0, "approved")).toBe("Approved");
+    expect(cellLabel("amendment_requested", 0, "approved")).toBe("Amendment requested");
   });
 
   it("matches the status filters", () => {
@@ -237,6 +238,10 @@ describe("cellStateOf / cellLabel / matchesStatusFilter", () => {
     expect(matchesStatusFilter(submitted, "submitted", "submitted")).toBe(true);
     expect(matchesStatusFilter(approved, "approved", "approved")).toBe(true);
     expect(matchesStatusFilter(approved, "approved", "submitted")).toBe(false);
+    expect(matchesStatusFilter(approved, "amendment_requested", "needs_attention")).toBe(true);
+    expect(matchesStatusFilter(approved, "amendment_requested", "amendment_requested")).toBe(true);
+    expect(matchesStatusFilter(approved, "amendment_requested", "approved")).toBe(true);
+    expect(matchesStatusFilter(approved, "approved", "amendment_requested")).toBe(false);
   });
 
   it("names a cell for screen readers and details it in the tooltip", () => {
@@ -438,13 +443,36 @@ describe("buildTracker", () => {
       escalated: 1,
       awaitingReview: 1,
       changesRequested: 0,
+      amendmentRequested: 0,
     });
     expect(buildTracker(data(), filters({ partner: P1 })).attention).toEqual({
       overdue: 0,
       escalated: 0,
       awaitingReview: 1,
       changesRequested: 0,
+      amendmentRequested: 0,
     });
+  });
+
+  it("flags approved months whose owner asked to amend them as needing attention (BRD B8)", () => {
+    // Kiddocare's approved month gets an open amendment request.
+    const base = data();
+    const approved = base.submissions.find((row) => row.status === "approved");
+    expect(approved).toBeDefined();
+    const submissions = base.submissions.map((row) => (row === approved ? { ...row, amendmentRequested: true } : row));
+    const model = buildTracker({ ...base, submissions }, filters());
+    expect(model.attention.amendmentRequested).toBe(1);
+    const cell = model.rows
+      .flatMap((row) => row.cells)
+      .find((candidate) => candidate.kind === "submission" && candidate.submission.id === approved?.id);
+    expect(cell).toMatchObject({ state: "amendment_requested", label: "Amendment requested", tone: "warning" });
+    expect(cell && "details" in cell ? cell.details : "").toContain("the company owner asked to amend it");
+    // It is still an approved month for the summary, and it needs attention.
+    expect(model.summary).toEqual(buildTracker(base, filters()).summary);
+    const attention = buildTracker({ ...base, submissions }, filters({ status: "needs_attention" }));
+    expect(attention.rows.map((row) => row.company.id)).toContain(approved?.companyId);
+    const only = buildTracker({ ...base, submissions }, filters({ status: "amendment_requested" }));
+    expect(only.rows.map((row) => row.company.id)).toEqual([approved?.companyId]);
   });
 
   it("filters rows by status and dims the months that do not match", () => {

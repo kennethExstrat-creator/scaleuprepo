@@ -1631,7 +1631,11 @@ export type Database = {
         Returns: string
       }
       set_company_revenue_segments: {
-        Args: { p_company_id: string; p_segments: Json }
+        Args: {
+          p_company_id: string
+          p_expected_ids?: string[]
+          p_segments: Json
+        }
         Returns: Database["public"]["Tables"]["revenue_segments"]["Row"][]
       }
       set_company_status: {
@@ -1641,6 +1645,15 @@ export type Database = {
           p_status: Database["public"]["Enums"]["company_status"]
         }
         Returns: undefined
+      }
+      set_cycle_settings: {
+        Args: {
+          p_backfill_grace_days: number
+          p_due_day: number
+          p_escalation_days: number
+          p_expected_updated_at?: string
+        }
+        Returns: string
       }
       staff_display_names: {
         Args: { p_ids: string[] }

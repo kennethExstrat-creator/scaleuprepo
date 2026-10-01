@@ -36,7 +36,10 @@ function FilterLink({ children, onClick }: { children: React.ReactNode; onClick:
   );
 }
 
-/** "Across these 6 months: 2 overdue (1 escalated) · 3 awaiting review · 1 changes requested". */
+/**
+ * "Across these 6 months: 2 overdue (1 escalated) · 3 awaiting review · 1 changes requested · 1 amendment
+ * requested".
+ */
 function AttentionLine({
   attention,
   months,
@@ -71,6 +74,13 @@ function AttentionLine({
     parts.push(
       <FilterLink key="changes" onClick={() => onFilter("changes_requested")}>
         {attention.changesRequested} with changes requested
+      </FilterLink>,
+    );
+  }
+  if (attention.amendmentRequested > 0) {
+    parts.push(
+      <FilterLink key="amendments" onClick={() => onFilter("amendment_requested")}>
+        {attention.amendmentRequested} {attention.amendmentRequested === 1 ? "amendment" : "amendments"} requested
       </FilterLink>,
     );
   }

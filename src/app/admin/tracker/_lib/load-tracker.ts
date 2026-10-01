@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { AMENDMENT_PREFIX, isPendingAmendment } from "@/components/review/amendment";
 import { toActionError } from "@/lib/actions/result";
 import { DEFAULT_ESCALATION_DAYS } from "@/lib/constants";
 import { DataError, getPlatformSettings, isNotFoundError } from "@/lib/data";
@@ -124,20 +125,61 @@ async function loadSubmissions(sb: Client, months: TrackerMonth[]): Promise<Trac
   return rows.flatMap((row) => toTrackerSubmission(row) ?? []);
 }
 
+type AmendmentThread = { submission_id: string; body: string; created_at: string };
+
+/**
+ * Open amendment requests (BRD B8): every open, shared "Amendment requested: …" thread of the portfolio
+ * (ScaleUp reads every comment; such threads are few, so no month filter).
+ */
+async function loadAmendmentThreads(sb: Client): Promise<AmendmentThread[]> {
+  const { data, error } = await sb
+    .from("comments")
+    .select("submission_id, body, created_at")
+    .is("parent_id", null)
+    .is("resolved_at", null)
+    .eq("visibility", "shared")
+    .like("body", `${AMENDMENT_PREFIX.trim()}%`);
+  if (error) throw loadError("the amendment requests", error);
+  const rows: AmendmentThread[] = data;
+  return rows;
+}
+
+/** Marks approved months whose owner asked to amend them and that ScaleUp has not answered yet. */
+export function withAmendmentRequests(
+  submissions: TrackerSubmission[],
+  threads: readonly AmendmentThread[],
+): TrackerSubmission[] {
+  if (threads.length === 0) return submissions;
+  const bySubmission = new Map<string, AmendmentThread[]>();
+  for (const thread of threads) bySubmission.set(thread.submission_id, [...(bySubmission.get(thread.submission_id) ?? []), thread]);
+  return submissions.map((submission) => {
+    const requested = (bySubmission.get(submission.id) ?? []).some((thread) =>
+      isPendingAmendment(
+        { status: submission.status, approvedAt: submission.approvedAt },
+        { body: thread.body, createdAt: thread.created_at, resolved: false, shared: true },
+      ),
+    );
+    return requested ? { ...submission, amendmentRequested: true } : submission;
+  });
+}
+
 /**
  * Opens due months, then loads the portfolio for the tracker in parallel (the monthly updates as soon
- * as the open months are known). Throws a DataError when a query fails.
+ * as the open months are known, and the owners' open amendment requests). Throws a DataError when a query
+ * fails.
  */
 export async function loadTracker(sb: Client, currentUserId: string): Promise<TrackerLoad> {
   const openError = await openDueMonths(sb);
   const monthsPromise = loadMonths(sb);
-  const [months, companies, funds, escalationDays, submissions] = await Promise.all([
+  const [months, companies, funds, escalationDays, loaded, amendments] = await Promise.all([
     monthsPromise,
     loadCompanies(sb),
     loadFunds(sb),
     loadEscalationDays(sb),
     monthsPromise.then((months) => loadSubmissions(sb, months)),
+    loadAmendmentThreads(sb),
   ]);
+  const submissions = withAmendmentRequests(loaded, amendments);
   return {
     data: { months, companies, submissions, funds, escalationDays, today: todayMYT(), currentUserId },
     openError,

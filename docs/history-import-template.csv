@@ -1,0 +1,3 @@
+company,month,revenue_total,gross_profit,net_profit,cash_in_bank,burn_rate,headcount_ft,headcount_pt,segment:Online,segment:Retail,kpi:Revenue per outlet [Mont Kiara],key_milestones,fundraising_status,team_morale,help_tags,# source
+Example Company,2025-07,,"40,000",-5000,"1,250,000",60000,12,3,"70,000","30,000",15000,"Opened the second outlet.",Preparing to raise,4,Hiring; Finance,C4 workbook H2 2025
+Example Company,Aug 2025,95000,38000,-7000,"1,190,000",60000,12,3,,,,,,,,C4 workbook H2 2025

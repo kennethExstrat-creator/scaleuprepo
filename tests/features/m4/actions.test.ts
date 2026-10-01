@@ -45,10 +45,11 @@ import {
   deleteFxRateAction,
   extendDeadlineAction,
   openMonthEarlyAction,
+  updateCycleSettingsAction,
   updateFxRateAction,
 } from "@/app/admin/cycles/actions";
 import { updateSettingsAction } from "@/app/admin/settings/actions";
-import { settingsFromRow } from "@/app/admin/settings/_lib/settings-model";
+import { MFA_ALWAYS_ON_MESSAGE, settingsFromRow } from "@/app/admin/settings/_lib/settings-model";
 import { MESSAGES } from "@/lib/actions/result";
 import { getCompany, getPlatformSettings, getSubmission } from "@/lib/data";
 import type { CompanyRow, SubmissionRow } from "@/lib/types/domain";
@@ -271,6 +272,39 @@ describe("FX rate actions", () => {
   });
 });
 
+describe("updateCycleSettingsAction (BRD A5, B10)", () => {
+  const input = { dueDay: 20, graceDays: 10, escalationDays: 21, expectedUpdatedAt: SETTINGS.updated_at };
+
+  it("lets Fund Admins set the due day, grace period and escalation through set_cycle_settings", async () => {
+    state.role = "fund_admin";
+    const fake = fakeSupabase({ rpc: () => ({ data: "2026-10-01T02:00:00+00:00", error: null }) });
+    state.client = fake.client;
+    expect(await updateCycleSettingsAction(input)).toEqual({ ok: true, data: { updatedAt: "2026-10-01T02:00:00+00:00" } });
+    expect(fake.rpcCalls).toEqual([
+      {
+        fn: "set_cycle_settings",
+        args: { p_due_day: 20, p_backfill_grace_days: 10, p_escalation_days: 21, p_expected_updated_at: SETTINGS.updated_at },
+      },
+    ]);
+    expect(fake.calls).toEqual([]); // never a direct platform_settings write
+    expect(revalidatePath).toHaveBeenCalledWith("/admin/cycles");
+  });
+
+  it("refuses other roles and values out of range, and shows the database's refusal", async () => {
+    state.role = "partner";
+    expect(await updateCycleSettingsAction(input)).toEqual({ ok: false, error: MESSAGES.permission });
+    state.role = "super_admin";
+    expect(await updateCycleSettingsAction({ ...input, dueDay: 29 })).toMatchObject({
+      ok: false,
+      fieldErrors: { dueDay: "Choose a due day from 1 to 28." },
+    });
+    const stale =
+      "Someone else changed the settings while you were editing. Reload the page to see their changes, then try again.";
+    state.client = fakeSupabase({ rpc: () => ({ data: null, error: pgError("P0001", stale) }) }).client;
+    expect(await updateCycleSettingsAction(input)).toEqual({ ok: false, error: stale });
+  });
+});
+
 describe("updateSettingsAction", () => {
   const saved = settingsFromRow(SETTINGS);
   const input = (values: Partial<typeof saved>, expectedUpdatedAt = SETTINGS.updated_at) => ({
@@ -337,5 +371,15 @@ describe("updateSettingsAction", () => {
   it("shows the database's refusal", async () => {
     state.client = fakeSupabase({ tables: () => ({ data: null, error: pgError("23514", "check constraint") }) }).client;
     expect(await updateSettingsAction(input({ dueDay: 20 }))).toEqual({ ok: false, error: MESSAGES.notAllowed });
+  });
+
+  it("never turns two-factor authentication off (BRD §11, B11), but turns it back on", async () => {
+    const fake = fakeSupabase({ tables: () => ({ data: [{ id: 1 }], error: null }) });
+    state.client = fake.client;
+    expect(await updateSettingsAction(input({ requireMfa: false, dueDay: 20 }))).toEqual({
+      ok: false,
+      error: MFA_ALWAYS_ON_MESSAGE,
+    });
+    expect(fake.calls).toEqual([]);
   });
 });

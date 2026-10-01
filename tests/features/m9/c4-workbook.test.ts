@@ -271,8 +271,10 @@ describe("C4 workbook", () => {
     expect(String(value(rl, "A3"))).toContain("Revenue segments are the company's own breakdown and add up to total revenue");
     // Months that are not approved stay empty and greyed out.
     expect(rl.getCell("F10").fill).toMatchObject({ fgColor: { argb: "FFF4F4F4" } });
-    // No RM block for MYR companies.
-    expect(value(rl, "A24")).toBeNull();
+    // QoQ and HoH follow YoY (BRD §6.1); no RM block for MYR companies.
+    expect(value(rl, "A23")).toBe("Revenue QoQ %");
+    expect(value(rl, "A24")).toBe("Revenue HoH %");
+    expect(value(rl, "A26")).toBeNull();
   });
 
   it("includes every month, marked by status, when asked", () => {
@@ -462,14 +464,14 @@ describe("C4 workbook", () => {
     });
     const rl = sheet(buildC4Workbook(usd), "Revenue Lines");
     expect(value(rl, "A4")).toBe("Line (USD)");
-    // Rows 6–16 are the figures; row 17 is blank; the RM block starts at row 18.
-    expect(String(value(rl, "A18"))).toContain("RM equivalent");
-    expect(rowValues(rl, 19, 4)).toEqual(["FX rate (USD to MYR)", 4.2, null, null]);
-    expect(rowValues(rl, 20, 4)).toEqual(["Total revenue (RM)", 4_200, null, null]);
-    expect(rowValues(rl, 23, 4)).toEqual(["Cash in bank (RM)", 42_000, null, null]);
+    // Rows 6–18 are the figures (… YoY, QoQ, HoH); row 19 is blank; the RM block starts at row 20.
+    expect(String(value(rl, "A20"))).toContain("RM equivalent");
+    expect(rowValues(rl, 21, 4)).toEqual(["FX rate (USD to MYR)", 4.2, null, null]);
+    expect(rowValues(rl, 22, 4)).toEqual(["Total revenue (RM)", 4_200, null, null]);
+    expect(rowValues(rl, 25, 4)).toEqual(["Cash in bank (RM)", 42_000, null, null]);
 
     const companyView = sheet(buildC4Workbook({ ...usd, fxVisible: false }), "Revenue Lines");
-    expect(value(companyView, "A18")).toBeNull();
+    expect(value(companyView, "A20")).toBeNull();
     const grid = sheet(buildC4Workbook({ ...usd, fxVisible: false }), "Monthly Grid");
     expect(rowValues(grid, 4, 5)).toEqual(["Month", "Status", "Submitted", "Approved", "Total revenue"]);
   });
@@ -492,17 +494,19 @@ describe("C4 workbook", () => {
       ],
     });
     const rl = sheet(buildC4Workbook(usd), "Revenue Lines");
-    // Rows 6–20: heading, Rentals, Total revenue, heading, Fleet sales, then GP … YoY; 21 blank; 22 RM header.
+    // Rows 6–22: heading, Rentals, Total revenue, heading, Fleet sales, then GP … YoY, QoQ, HoH; 23 blank;
+    // 24 RM header.
     expect(value(rl, "A20")).toBe("Revenue YoY %");
-    expect(value(rl, "A21")).toBeNull();
-    expect(String(value(rl, "A22"))).toContain("RM equivalent");
-    expect(rowValues(rl, 23, 3)).toEqual(["FX rate (USD to MYR)", 4, null]);
-    expect(value(rl, "A24")).toBe("Company revenue segments (add up to total revenue)");
-    expect(rowValues(rl, 25, 3)).toEqual(["Rentals (RM)", 4_000, 4_000]);
-    expect(rowValues(rl, 26, 3)).toEqual(["Total revenue (RM)", 4_000, 4_000]);
-    expect(value(rl, "A27")).toBe("ScaleUp revenue lines (need not add up to total revenue)");
-    expect(rowValues(rl, 28, 3)).toEqual(["Fleet sales (RM)", 1_200, 1_200]);
-    expect(value(rl, "A29")).toBe("Gross profit (RM)");
+    expect(value(rl, "A22")).toBe("Revenue HoH %");
+    expect(value(rl, "A23")).toBeNull();
+    expect(String(value(rl, "A24"))).toContain("RM equivalent");
+    expect(rowValues(rl, 25, 3)).toEqual(["FX rate (USD to MYR)", 4, null]);
+    expect(value(rl, "A26")).toBe("Company revenue segments (add up to total revenue)");
+    expect(rowValues(rl, 27, 3)).toEqual(["Rentals (RM)", 4_000, 4_000]);
+    expect(rowValues(rl, 28, 3)).toEqual(["Total revenue (RM)", 4_000, 4_000]);
+    expect(value(rl, "A29")).toBe("ScaleUp revenue lines (need not add up to total revenue)");
+    expect(rowValues(rl, 30, 3)).toEqual(["Fleet sales (RM)", 1_200, 1_200]);
+    expect(value(rl, "A31")).toBe("Gross profit (RM)");
   });
 
   it("computes revenue YoY like for like", () => {
@@ -523,6 +527,83 @@ describe("C4 workbook", () => {
     expect(value(rl, "Q16")).toBe(0.5);
     expect(value(rl, "D5")).toBe("No update");
     expect(value(rl, "J5")).toBe("0 months included");
+  });
+
+  it("adds the confirmed half-year closes, restated to the management accounts where they were", () => {
+    const input = batikInput({
+      closes: [
+        {
+          period_type: "half",
+          label: "H1 2026",
+          status: "confirmed",
+          computed_totals: { months_count: 2, revenue_total: 210_000, gross_profit: 80_000, net_profit: 9_000, cash_in_bank: 500_000, avg_burn_rate: 20_000 },
+          restated_totals: { revenue_total: 215_000 },
+          restatement_reason: "Audited management accounts.",
+        },
+        { period_type: "half", label: "H2 2026", status: "open", computed_totals: null, restated_totals: null, restatement_reason: null },
+      ],
+    });
+    const rl = sheet(buildC4Workbook(input), "Revenue Lines");
+    let headingRow = 0;
+    rl.eachRow((row, rowNumber) => {
+      if (row.getCell(1).value === "Confirmed half-year closes (restated to the management accounts where noted)") headingRow = rowNumber;
+    });
+    expect(headingRow).toBeGreaterThan(20);
+    // The H1 2026 column: after May and Jun 2026.
+    let halfColumn = 0;
+    rl.getRow(4).eachCell((cell, col) => {
+      if (cell.value === "H1 2026") halfColumn = col;
+    });
+    expect(halfColumn).toBeGreaterThan(0);
+    const revenue = rl.getRow(headingRow + 1).getCell(halfColumn);
+    expect(rl.getRow(headingRow + 1).getCell(1).value).toBe("Total revenue (confirmed)");
+    expect(revenue.value).toBe(215_000);
+    expect(String(revenue.note)).toContain("Restated to the management accounts: Audited management accounts.");
+    expect(rl.getRow(headingRow + 2).getCell(halfColumn).value).toBe(80_000);
+    expect(rl.getRow(headingRow + 2).getCell(halfColumn).note).toBeUndefined();
+    // Without a confirmed close in the columns there is no block.
+    const none = sheet(buildC4Workbook(batikInput({ closes: [] })), "Revenue Lines");
+    const noneLabels: string[] = [];
+    none.getColumn(1).eachCell((cell) => noneLabels.push(String(cell.value ?? "")));
+    expect(noneLabels.some((label) => label.startsWith("Confirmed half-year closes"))).toBe(false);
+  });
+
+  it("computes revenue QoQ and HoH over complete periods only (BRD §6.1)", () => {
+    // H2 2025: 100 a month (Q3 300, Q4 300); Q1 2026: 100 a month; Q2 2026: 150 a month.
+    const revenue: Record<string, number> = {
+      "2025-07": 100, "2025-08": 100, "2025-09": 100, "2025-10": 100, "2025-11": 100, "2025-12": 100,
+      "2026-01": 100, "2026-02": 100, "2026-03": 100, "2026-04": 150, "2026-05": 150, "2026-06": 150,
+    };
+    const input = batikInput({
+      today: "2026-07-15",
+      segments: [],
+      months: Object.entries(revenue).map(([key, amount]) =>
+        month(key, "approved", { approved_at: "2026-07-01T02:00:00Z", values: { revenue_total: num(amount) } }),
+      ),
+    });
+    const rl = sheet(buildC4Workbook(input), "Revenue Lines");
+    // B–G Jul–Dec 2025, H H2 2025, I–N Jan–Jun 2026, O H1 2026.
+    expect(value(rl, "N4")).toBe("Jun 2026");
+    expect(value(rl, "O4")).toBe("H1 2026");
+    expect(value(rl, "A17")).toBe("Revenue QoQ %");
+    expect(value(rl, "D17")).toBeNull(); // Q3 2025: Q2 2025 is not complete
+    expect(value(rl, "G17")).toBe(0); // Q4 2025 against Q3 2025
+    expect(value(rl, "K17")).toBe(0); // Q1 2026 against Q4 2025
+    expect(value(rl, "N17")).toBe(0.5); // Q2 2026 (450) against Q1 2026 (300)
+    expect(value(rl, "M17")).toBeNull(); // not a quarter end
+    expect(value(rl, "O17")).toBeNull();
+    expect(value(rl, "A18")).toBe("Revenue HoH %");
+    expect(value(rl, "H18")).toBeNull(); // H1 2025 is not on the platform
+    expect(value(rl, "O18")).toBe(0.25); // H1 2026 (750) against H2 2025 (600)
+    expect(value(rl, "N18")).toBeNull();
+    // A month that is not complete (not approved) leaves its periods out.
+    const partial = batikInput({
+      ...input,
+      months: input.months.map((m) => (m.month === "2026-05-01" ? { ...m, status: "submitted" as const } : m)),
+    });
+    const partialSheet = sheet(buildC4Workbook(partial), "Revenue Lines");
+    expect(value(partialSheet, "N17")).toBeNull();
+    expect(value(partialSheet, "O18")).toBeNull();
   });
 
   it("writes one KPI row per KPI and dimension member", () => {

@@ -177,5 +177,29 @@ export function c4Tables(): Record<string, Row[]> {
     submission_kpi_values: [
       { id: "k1", submission_id: MAY, kpi_id: KPI, dimension_member_id: OLD_TOWN, value_number: 5_000, value_text: null, value_bool: null },
     ],
+    period_closes: [
+      {
+        id: "close-h1",
+        company_id: BATIK,
+        period_type: "half",
+        period_start: "2026-01-01",
+        label: "H1 2026",
+        status: "confirmed",
+        computed_totals: { months_count: 2, revenue_total: 210_000 },
+        restated_totals: { revenue_total: 215_000 },
+        restatement_reason: "Audited management accounts.",
+      },
+      {
+        id: "close-q2",
+        company_id: BATIK,
+        period_type: "quarter",
+        period_start: "2026-04-01",
+        label: "Q2 2026",
+        status: "open",
+        computed_totals: null,
+        restated_totals: null,
+        restatement_reason: null,
+      },
+    ],
   };
 }

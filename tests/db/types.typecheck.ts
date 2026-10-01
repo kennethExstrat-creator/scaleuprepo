@@ -58,10 +58,24 @@ export type TypeAssertions = [
   Expect<Equal<Tables<"revenue_segments">["kind"], string>>,
   Expect<Equal<Tables<"revenue_segments">["retired_at"], string | null>>,
   Expect<Equal<undefined extends TablesInsert<"revenue_segments">["kind"] ? true : false, true>>,
+  // (20261001000300: the optional p_expected_ids — the ids the list is based on, checked under the lock.)
   Expect<
     Equal<
       Database["public"]["Functions"]["set_company_revenue_segments"],
-      { Args: { p_company_id: string; p_segments: Json }; Returns: Tables<"revenue_segments">[] }
+      {
+        Args: { p_company_id: string; p_expected_ids?: string[]; p_segments: Json };
+        Returns: Tables<"revenue_segments">[];
+      }
+    >
+  >,
+  // BRD A5, B10 (20261001000500): Super Admins and Fund Admins set the reporting-cycle settings.
+  Expect<
+    Equal<
+      Database["public"]["Functions"]["set_cycle_settings"],
+      {
+        Args: { p_backfill_grace_days: number; p_due_day: number; p_escalation_days: number; p_expected_updated_at?: string };
+        Returns: string;
+      }
     >
   >,
   Expect<Equal<Tables<"access_links">["purpose"], string>>,

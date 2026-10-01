@@ -1,9 +1,10 @@
 "use server";
 
-// Server Actions of /admin/cycles (module M4, BRD A5, B4, B18, B19, B21): open the current month early
-// (open_period), extend a month's deadline (extend_due_date) and keep the monthly FX rates (fx_rates).
-// Each re-checks the role first; the database enforces the same rules (RPC checks; RLS lets only Super
-// Admins and Fund Admins write fx_rates).
+// Server Actions of /admin/cycles (module M4, BRD A5, B4, B10, B18, B19, B21): open the current month early
+// (open_period), extend a month's deadline (extend_due_date), keep the monthly FX rates (fx_rates) and set
+// the reporting-cycle settings — due day, grace period, escalation (set_cycle_settings). Each re-checks the
+// role first; the database enforces the same rules (RPC checks; RLS lets only Super Admins and Fund Admins
+// write fx_rates).
 
 import { revalidatePath } from "next/cache";
 
@@ -24,7 +25,13 @@ import {
 import { createClient } from "@/lib/supabase/server";
 
 import { newDueDateIssue } from "./_lib/cycles-model";
-import { extendDeadlineSchema, fxRateKeySchema, fxRateSchema, openMonthSchema } from "./_lib/schemas";
+import {
+  cycleSettingsSchema,
+  extendDeadlineSchema,
+  fxRateKeySchema,
+  fxRateSchema,
+  openMonthSchema,
+} from "./_lib/schemas";
 
 const CYCLE_ROLES = ["super_admin", "fund_admin"] as const;
 
@@ -176,6 +183,36 @@ export async function deleteFxRateAction(input: unknown): Promise<ActionResult<{
     if (data.length === 0) throw new ActionError(RATE_NOT_FOUND);
     revalidateRates();
     return ok({ currency, month });
+  } catch (e) {
+    return toActionError(e);
+  }
+}
+
+/**
+ * Sets the reporting-cycle settings (BRD A5 "set the due day", B10: cycles and deadlines are Fund Admin
+ * work): the day months are due, the grace period of months that open late (and of months sent back) and
+ * the days after which an overdue month escalates. Super Admin and Fund Admin, through set_cycle_settings
+ * (the settings row itself stays Super Admin only). New due dates apply to months opened from now on;
+ * months already open keep theirs. Returns the row's new `updated_at`.
+ */
+export async function updateCycleSettingsAction(input: unknown): Promise<ActionResult<{ updatedAt: string }>> {
+  try {
+    const ctx = await assertScaleUp(CYCLE_ROLES);
+    if (!canManageCycles(ctx)) throw new ActionError(MESSAGES.permission);
+    const values = cycleSettingsSchema.parse(input);
+
+    const sb = await createClient();
+    const { data, error } = await sb.rpc("set_cycle_settings", {
+      p_due_day: values.dueDay,
+      p_backfill_grace_days: values.graceDays,
+      p_escalation_days: values.escalationDays,
+      p_expected_updated_at: values.expectedUpdatedAt ?? undefined,
+    });
+    if (error) throw error;
+
+    revalidateCycles();
+    revalidatePath("/admin/settings");
+    return ok({ updatedAt: data });
   } catch (e) {
     return toActionError(e);
   }

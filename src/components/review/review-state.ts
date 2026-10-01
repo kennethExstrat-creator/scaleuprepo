@@ -2,6 +2,8 @@
 // permission flags come from src/lib/auth/permissions.ts on the server; the database enforces everything
 // again (request_changes, approve_submission, reopen_submission, extend_due_date).
 import { formatDate } from "@/lib/format";
+
+import type { PendingAmendment } from "./amendment";
 import { addDays, daysBetween } from "@/lib/periods";
 import type { SubmissionStatus } from "@/lib/types/enums";
 
@@ -95,11 +97,31 @@ export function reviewActions(
   return actions;
 }
 
-/** A short headline and explanation of where the month stands, for the review panel. */
+/** The longest part of an amendment reason quoted in the review panel's summary (the thread has all of it). */
+const AMENDMENT_REASON_QUOTE = 240;
+
+function quoteReason(reason: string): string {
+  const text = reason.replace(/\s+/g, " ").trim();
+  return text.length > AMENDMENT_REASON_QUOTE ? `${text.slice(0, AMENDMENT_REASON_QUOTE - 1).trimEnd()}…` : text;
+}
+
+/**
+ * A short headline and explanation of where the month stands, for the review panel. An approved month
+ * whose owner asked to amend it (`amendment`, BRD B8; pendingAmendment) says so, next to "Reopen".
+ */
 export function reviewStatusSummary(
   status: SubmissionStatus,
-  info: { companyName: string; monthLabel: string; companyActive: boolean },
+  info: { companyName: string; monthLabel: string; companyActive: boolean; amendment?: PendingAmendment | null },
 ): { title: string; description: string } {
+  if (status === "approved" && info.amendment) {
+    const asked = `${info.companyName}'s owner asked on ${formatDate(info.amendment.requestedAt)} to amend ${info.monthLabel}: “${quoteReason(info.amendment.reason)}”.`;
+    return {
+      title: "Amendment requested",
+      description: info.companyActive
+        ? `${asked} Reopen the month so they can correct and resubmit it (it then needs approval again), or reply in the comments and resolve the thread if no change is needed.`
+        : `${asked} The company is no longer active, so the month cannot be reopened: reply in the comments and resolve the thread.`,
+    };
+  }
   switch (status) {
     case "draft":
       return {

@@ -76,6 +76,8 @@ export type ReviewAssertions = [
       | "log_audit_event"
       // BRD B30: the company's own revenue segments (owner, or ScaleUp on behalf).
       | "set_company_revenue_segments"
+      // BRD A5, B10: the reporting-cycle settings for Super Admins and Fund Admins (20261001000500).
+      | "set_cycle_settings"
       // Service role only (the /access accept action, BRD B14); not executable by authenticated.
       | "claim_access_link"
     >

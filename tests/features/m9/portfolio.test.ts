@@ -3,8 +3,12 @@ import { describe, expect, it } from "vitest";
 
 import { CSV_BOM } from "@/lib/exports/csv";
 import {
+  PORTFOLIO_CLOSE_COLUMNS,
   PORTFOLIO_COLUMNS,
+  PORTFOLIO_KPI_COLUMNS,
   PORTFOLIO_SEGMENT_COLUMNS,
+  buildPortfolioCloseRows,
+  buildPortfolioKpiRows,
   buildPortfolioRows,
   buildPortfolioSegmentRows,
   buildPortfolioWorkbook,
@@ -287,6 +291,105 @@ describe("portfolio workbook", () => {
     const empty = buildPortfolioWorkbook(rows, META, []);
     expect(empty.getWorksheet("Revenue segments")?.getCell("A3").value).toBe("None of these months has revenue segment figures.");
     expect(buildPortfolioWorkbook(rows, META).worksheets.map((ws) => ws.name)).toEqual(["Portfolio data", "About"]);
+  });
+
+  it("adds KPIs (long format) and Period closes with restated totals (BRD §10, §6.1)", async () => {
+    const rows = buildPortfolioRows(input([financial({ submission_id: SUB_JUL })]));
+    const KPI = "e0000000-0000-4000-8000-000000000001";
+    const FLAG = "e0000000-0000-4000-8000-000000000003";
+    const OTHER = "e0000000-0000-4000-8000-000000000099";
+    const MONT_KIARA = "d1000000-0000-4000-8000-000000000001";
+    const kpiRows = buildPortfolioKpiRows(
+      rows,
+      [
+        { id: KPI, company_id: BATIK, name: "Revenue per outlet", unit: "RM", value_type: "currency", sort_order: 1 },
+        { id: FLAG, company_id: BATIK, name: "Profitable", unit: null, value_type: "boolean", sort_order: 3 },
+        { id: OTHER, company_id: KIDDO, name: "App downloads", unit: "downloads", value_type: "integer", sort_order: 1 },
+      ],
+      [{ id: MONT_KIARA, name: "Mont Kiara", sort_order: 1 }],
+      [
+        { submission_id: SUB_JUL, kpi_id: FLAG, dimension_member_id: MONT_KIARA, value_number: null, value_text: null, value_bool: true },
+        { submission_id: SUB_JUL, kpi_id: KPI, dimension_member_id: MONT_KIARA, value_number: 12_500.5, value_text: null, value_bool: null },
+        // Another company's KPI on this month, an unknown month and an empty value are left out.
+        { submission_id: SUB_JUL, kpi_id: OTHER, dimension_member_id: null, value_number: 1, value_text: null, value_bool: null },
+        { submission_id: SUB_AUG, kpi_id: KPI, dimension_member_id: MONT_KIARA, value_number: 1, value_text: null, value_bool: null },
+        { submission_id: SUB_JUL, kpi_id: KPI, dimension_member_id: null, value_number: null, value_text: null, value_bool: null },
+      ],
+    );
+    expect(kpiRows.map((row) => [row.company, row.month, row.kpi, row.member, row.unit, row.value])).toEqual([
+      ["Batik Boutique", "2026-07", "Revenue per outlet", "Mont Kiara", "RM", 12_500.5],
+      ["Batik Boutique", "2026-07", "Profitable", "Mont Kiara", null, "Yes"],
+    ]);
+
+    const closeRows = buildPortfolioCloseRows(rows, [
+      {
+        id: "close-h2",
+        company_id: BATIK,
+        period_type: "half",
+        period_start: "2026-07-01",
+        period_end: "2026-12-31",
+        label: "H2 2026",
+        status: "open",
+        confirmed_at: null,
+        computed_totals: null,
+        restated_totals: null,
+        restatement_reason: null,
+      },
+      {
+        id: "close-q3",
+        company_id: BATIK,
+        period_type: "quarter",
+        period_start: "2026-07-01",
+        period_end: "2026-09-30",
+        label: "Q3 2026",
+        status: "confirmed",
+        confirmed_at: "2026-10-12T02:00:00Z",
+        computed_totals: { months_count: 3, revenue_total: 300_000, gross_profit: 90_000, gp_pct: 30, net_profit: 10_000, np_pct: 3.3333 },
+        restated_totals: { revenue_total: 310_000 },
+        restatement_reason: "Management accounts include a late invoice.",
+      },
+      // Another company's close: not in the extract's rows, left out.
+      {
+        id: "x",
+        company_id: KIDDO,
+        period_type: "quarter",
+        period_start: "2026-07-01",
+        period_end: "2026-09-30",
+        label: "Q3 2026",
+        status: "open",
+        confirmed_at: null,
+        computed_totals: null,
+        restated_totals: null,
+        restatement_reason: null,
+      },
+    ]);
+    expect(closeRows.map((row) => [row.label, row.status, row.computed?.revenue_total ?? null, row.restated?.revenue_total ?? null, row.confirmed?.revenue_total ?? null])).toEqual([
+      ["Q3 2026", "confirmed", 300_000, 310_000, 310_000],
+      ["H2 2026", "open", null, null, null],
+    ]);
+
+    const loaded = new ExcelJS.Workbook();
+    await loaded.xlsx.load(await buildPortfolioWorkbook(rows, META, [], { kpiRows, closeRows }).xlsx.writeBuffer());
+    expect(loaded.worksheets.map((ws) => ws.name)).toEqual(["Portfolio data", "Revenue segments", "KPIs", "Period closes", "About"]);
+    const kpis = loaded.getWorksheet("KPIs");
+    const closes = loaded.getWorksheet("Period closes");
+    if (!kpis || !closes) throw new Error("missing sheets");
+    const header = (sheet: ExcelJS.Worksheet) => {
+      const values: unknown[] = [];
+      sheet.getRow(1).eachCell((cell) => values.push(cell.value));
+      return values;
+    };
+    expect(header(kpis)).toEqual(PORTFOLIO_KPI_COLUMNS.map((column) => column.header));
+    expect(header(closes)).toEqual(PORTFOLIO_CLOSE_COLUMNS.map((column) => column.header));
+    expect([kpis.getCell("E2").value, kpis.getCell("F2").value, kpis.getCell("I2").value]).toEqual(["Revenue per outlet", "Mont Kiara", 12_500.5]);
+    expect(kpis.getCell("I3").value).toBe("Yes");
+    const column = (name: string) => PORTFOLIO_CLOSE_COLUMNS.findIndex((entry) => entry.header === name) + 1;
+    expect(closes.getRow(2).getCell(column("Revenue (calculated)")).value).toBe(300_000);
+    expect(closes.getRow(2).getCell(column("GP % (calculated)")).value).toBe(0.3);
+    expect(closes.getRow(2).getCell(column("Revenue (restated)")).value).toBe(310_000);
+    expect(closes.getRow(2).getCell(column("Revenue (confirmed)")).value).toBe(310_000);
+    expect(closes.getRow(2).getCell(column("Restatement reason")).value).toBe("Management accounts include a late invoice.");
+    expect(closes.getRow(3).getCell(column("Status")).value).toBe("Open");
   });
 
   it("notes a revenue entered before the segments were filled in, and explains open months (BRD B30)", async () => {

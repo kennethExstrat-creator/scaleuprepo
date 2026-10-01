@@ -236,6 +236,22 @@ function portfolioTables(): Tables {
       { submission_id: "5b000000-0000-4000-8000-000000000001", segment_id: RETAIL, amount: 100_000 },
       { submission_id: "5b000000-0000-4000-8000-000000000002", segment_id: RETAIL, amount: 100_000 },
     ],
+    company_kpis: [
+      { id: "e0000000-0000-4000-8000-000000000001", company_id: BATIK, name: "Outlets open", unit: "outlets", value_type: "integer", sort_order: 1 },
+    ],
+    submission_kpi_values: [
+      {
+        id: "e9000000-0000-4000-8000-000000000001",
+        submission_id: "5b000000-0000-4000-8000-000000000001",
+        kpi_id: "e0000000-0000-4000-8000-000000000001",
+        dimension_member_id: null,
+        value_number: 5,
+        value_text: null,
+        value_bool: null,
+      },
+    ],
+    kpi_dimension_members: [],
+    period_closes: [],
   };
 }
 
@@ -264,18 +280,19 @@ describe("GET /api/exports/portfolio", () => {
     });
   });
 
-  it("sends Excel by default for every fund, with the revenue segments sheet", async () => {
+  it("sends Excel by default for every fund, with the revenue segments, KPI and period close sheets", async () => {
     const { audit, requests } = useFake(portfolioTables());
     const response = await portfolioGet(request("/api/exports/portfolio?status=all&fund=all"));
     expect(response.status).toBe(200);
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(await response.arrayBuffer());
-    expect(workbook.worksheets.map((ws) => ws.name)).toEqual(["Portfolio data", "Revenue segments", "About"]);
+    expect(workbook.worksheets.map((ws) => ws.name)).toEqual(["Portfolio data", "Revenue segments", "KPIs", "Period closes", "About"]);
     expect(workbook.getWorksheet("Portfolio data")?.rowCount).toBe(3);
     expect(workbook.getWorksheet("Revenue segments")?.rowCount).toBe(3);
+    expect(workbook.getWorksheet("KPIs")?.getCell("E2").value).toBe("Outlets open");
     expect(audit[0]).toMatchObject({
       p_summary: "Exported portfolio data (All funds · All months · all statuses) as XLSX: 2 rows",
-      p_data: { format: "xlsx", fund: null, status: "all", rows: 2, companies: 1, segment_rows: 2 },
+      p_data: { format: "xlsx", fund: null, status: "all", rows: 2, companies: 1, segment_rows: 2, kpi_rows: 1, period_closes: 0 },
     });
     expect(requests.some((r) => r.path === "submission_segment_values")).toBe(true);
   });

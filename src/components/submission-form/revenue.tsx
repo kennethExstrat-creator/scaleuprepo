@@ -11,12 +11,11 @@
 // segmentsForMonth (@/lib/types/domain). Inline errors follow the form's rules (after a field was left or
 // a submit attempt).
 
-import { ArrowRightIcon, ChartPieIcon } from "lucide-react";
+import { ArrowRightIcon, ChartPieIcon, HistoryIcon } from "lucide-react";
 import Link from "next/link";
 
 import { Money } from "@/components/app/money";
 import { Label } from "@/components/ui/label";
-import { REVENUE_SEGMENT_KIND_META } from "@/lib/constants";
 import { currencySymbol, formatMoney, toFiniteNumber } from "@/lib/format";
 import { fieldTarget, segmentTarget } from "@/lib/targets";
 import {
@@ -28,7 +27,7 @@ import {
 import type { SectionKind } from "@/lib/types/enums";
 import { cn } from "@/lib/utils";
 
-import { SEGMENT_SCALE, withSegmentAmount, withSegmentValue } from "./draft";
+import { SEGMENT_SCALE, withSegmentAmount, withSegmentValue, type EarlierSegmentFigure } from "./draft";
 import { TemplateFieldControl } from "./fields";
 import { CommentSlot, useFormContext } from "./form-context";
 import { NumberInput } from "./inputs";
@@ -50,13 +49,17 @@ export function RevenueArea({
   revenueField: TemplateFieldRow | undefined;
   sectionKind: SectionKind;
 }) {
-  const { bundle, draft, editable, segmentsHref } = useFormContext();
+  const { bundle, draft, editable, segmentsHref, earlierFigures = [] } = useFormContext();
   // An open month follows the segments in use; a submitted / approved one keeps those it has figures for.
-  const month = segmentsForMonth(bundle.config, draft, isEditableStatus(bundle.submission.status));
+  const open = isEditableStatus(bundle.submission.status);
+  const month = segmentsForMonth(bundle.config, draft, open);
   const revenueLabel = revenueField?.label ?? "Total revenue";
 
   return (
     <div className="flex flex-col gap-4">
+      {open && earlierFigures.length > 0 ? (
+        <EarlierFiguresNote figures={earlierFigures} editable={editable} hasSegments={month.company.length > 0} />
+      ) : null}
       {month.company.length > 0 ? (
         <CompanySegmentsTable segments={month.company} revenueLabel={revenueLabel} />
       ) : revenueField ? (
@@ -67,6 +70,61 @@ export function RevenueArea({
       ) : null}
       {month.scaleup.length > 0 ? <ScaleUpLinesTable lines={month.scaleup} /> : null}
     </div>
+  );
+}
+
+/**
+ * Figures the month held for the company's own segments that are no longer in use (BRD B30): it was
+ * submitted under the old segments and then sent back or reopened after the owner changed them. Shown for
+ * reference so they can be entered again under the current segments; not part of total revenue, and the
+ * month's next save removes them.
+ */
+function EarlierFiguresNote({
+  figures,
+  editable,
+  hasSegments,
+}: {
+  figures: EarlierSegmentFigure[];
+  editable: boolean;
+  hasSegments: boolean;
+}) {
+  const { currency } = useFormContext();
+  const total = sumSegmentAmounts(
+    figures.map((figure) => figure.segment),
+    Object.fromEntries(figures.map((figure) => [figure.segment.id, figure.amount])),
+  );
+  const amount = (value: number) => formatMoney(value, currency, { decimals: Number.isInteger(value) ? 0 : 2 });
+  return (
+    <section
+      aria-labelledby="sf-earlier-segment-figures"
+      className="flex items-start gap-2.5 rounded-lg border border-dashed bg-muted/30 p-3"
+    >
+      <HistoryIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+      <div className="flex min-w-0 flex-col gap-1.5">
+        <p id="sf-earlier-segment-figures" className="text-sm font-medium">
+          Reported earlier under segments no longer in use
+        </p>
+        <ul className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
+          {figures.map((figure) => (
+            <li key={figure.segment.id} className="tabular-nums">
+              <span className="text-muted-foreground">{figure.segment.name}:</span> {amount(figure.amount)}
+            </li>
+          ))}
+          {figures.length > 1 && total !== null ? (
+            <li className="tabular-nums">
+              <span className="text-muted-foreground">Together:</span> {amount(total)}
+            </li>
+          ) : null}
+        </ul>
+        <p className="text-xs text-muted-foreground">
+          {editable
+            ? hasSegments
+              ? "The revenue segments changed after this month was first submitted. Enter its revenue under the current segments below: these earlier figures are not part of total revenue, and they are removed from the month when it is next saved."
+              : "The revenue segments changed after this month was first submitted. Enter total revenue below: these earlier figures are not part of it, and they are removed from the month when it is next saved."
+            : "The revenue segments changed after this month was first submitted. These earlier figures are not part of total revenue while the month is open, and they are removed when it is next saved."}
+        </p>
+      </div>
+    </section>
   );
 }
 
@@ -204,7 +262,7 @@ function CompanySegmentsTable({ segments, revenueLabel }: { segments: RevenueSeg
     <section aria-labelledby={headerId} className="overflow-hidden rounded-lg border">
       <BlockHeader
         id={headerId}
-        title={REVENUE_SEGMENT_KIND_META.company.plural}
+        title="Self Defined Revenue Segment"
         note={
           editable
             ? "Enter the revenue of each segment. Total revenue is their sum."
@@ -273,7 +331,7 @@ function ScaleUpLinesTable({ lines }: { lines: RevenueSegmentRow[] }) {
   const headerId = "sf-scaleup-revenue-lines";
   return (
     <section aria-labelledby={headerId} className="overflow-hidden rounded-lg border">
-      <BlockHeader id={headerId} title={REVENUE_SEGMENT_KIND_META.scaleup.plural} note={SCALEUP_LINES_NOTE} />
+      <BlockHeader id={headerId} title="ScaleUp Required Revenue Segment" note={SCALEUP_LINES_NOTE} />
       <ul className="divide-y">
         {lines.map((line) => (
           <AmountRow

@@ -163,6 +163,14 @@ export const settingsSchema = z.object({
     .regex(/^[A-Za-z0-9][A-Za-z0-9._ -]*$/, "Use letters, numbers, dots and hyphens, for example 2026-10."),
 });
 
+/**
+ * Two-factor authentication is required for everyone (BRD §11 "2FA for all users", B11): Settings can turn
+ * it back on (an older database may have it off) but never off. Someone who lost their authenticator app
+ * gets their own 2FA reset on /admin/users instead.
+ */
+export const MFA_ALWAYS_ON_MESSAGE =
+  "Two-factor authentication is required for everyone and can't be turned off. If someone has lost their authenticator app, reset their two-factor authentication on the Users page.";
+
 /** The Server Action's input: the values plus the `updated_at` the form was loaded with (lost-update guard). */
 export const updateSettingsSchema = settingsSchema.extend({
   expectedUpdatedAt: z.string({ error: "Reload the page and try again." }).min(1, "Reload the page and try again."),

@@ -1067,6 +1067,11 @@ export type CyclesData = {
   dueDay: number;
   graceDays: number;
   escalationDays: number;
+  /**
+   * `platform_settings.updated_at` when the page loaded: "Change cycle settings" sends it back, so a save
+   * over someone else's change is refused (set_cycle_settings). Null when the settings row is missing.
+   */
+  settingsUpdatedAt?: string | null;
   /** Reporting months, newest first. */
   months: CycleMonth[];
   overdue: OverdueSummary;

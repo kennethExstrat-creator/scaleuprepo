@@ -8,7 +8,15 @@ import type { Database } from "@/lib/supabase/database.types";
 import { kpiCellKey } from "@/lib/targets";
 import type { TemplateVersionFull } from "@/lib/types/domain";
 
-import type { C4Include, C4Kpi, C4Month, C4StoredKpiValue, C4StoredValue, C4WorkbookInput } from "./c4-workbook";
+import type {
+  C4Close,
+  C4Include,
+  C4Kpi,
+  C4Month,
+  C4StoredKpiValue,
+  C4StoredValue,
+  C4WorkbookInput,
+} from "./c4-workbook";
 import { exportQueryError, fetchAllPages, fetchByIdChunks } from "./fetch-all";
 
 // Loads everything the C4 workbook needs with the caller's RLS-scoped client (ScaleUp staff, or an owner
@@ -59,7 +67,7 @@ export async function loadC4WorkbookInput(
   companyId: string,
   options: { include: C4Include; fxVisible: boolean; generatedAt: string; today?: string },
 ): Promise<C4WorkbookInput | null> {
-  const [configResult, submissionsRes, fxRes, currentTemplate] = await Promise.all([
+  const [configResult, submissionsRes, fxRes, currentTemplate, closesRes] = await Promise.all([
     getCompanyConfig(sb, companyId).then(
       (value) => ({ ok: true as const, value }),
       (error: unknown) => ({ ok: false as const, error }),
@@ -71,6 +79,12 @@ export async function loadC4WorkbookInput(
       .order("month", { ascending: true }),
     sb.from("v_submission_financials").select("submission_id, fx_rate_to_myr").eq("company_id", companyId),
     getCurrentTemplateVersion(sb),
+    // Half-year closes: confirmed ones show their (restated) totals under the half-year columns.
+    sb
+      .from("period_closes")
+      .select("period_type, label, status, computed_totals, restated_totals, restatement_reason")
+      .eq("company_id", companyId)
+      .eq("period_type", "half"),
   ]);
   if (!configResult.ok) {
     if (isNotFoundError(configResult.error)) return null;
@@ -79,6 +93,8 @@ export async function loadC4WorkbookInput(
   const config = configResult.value;
   if (submissionsRes.error) throw exportQueryError(OP, `load the monthly updates of company ${companyId}`, submissionsRes.error);
   if (fxRes.error) throw exportQueryError(OP, `load the FX rates of company ${companyId}`, fxRes.error);
+  if (closesRes.error) throw exportQueryError(OP, `load the period closes of company ${companyId}`, closesRes.error);
+  const closes: C4Close[] = closesRes.data;
 
   const submissions: SubmissionListRow[] = submissionsRes.data;
   const fxRows: FxRow[] = fxRes.data;
@@ -196,5 +212,6 @@ export async function loadC4WorkbookInput(
     segments: config.segments,
     kpis,
     months,
+    closes,
   };
 }

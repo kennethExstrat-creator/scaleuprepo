@@ -16,8 +16,8 @@ import type { CompanyRole } from "@/lib/types/enums";
 
 export type SwitcherCompany = { id: string; name: string; role: CompanyRole };
 
-/** Portal sections that exist for every company (Team is owner-only). */
-const SHARED_SECTIONS = new Set(["updates", "documents", "history"]);
+/** Portal sections that exist for every company (Team is owner-only). Revenue segments: BRD B30. */
+const SHARED_SECTIONS = new Set(["updates", "segments", "documents", "history"]);
 
 /**
  * Company picker for founders with several companies. Keeps the current section when it

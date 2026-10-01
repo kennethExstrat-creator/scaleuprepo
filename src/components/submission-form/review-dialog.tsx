@@ -244,9 +244,11 @@ export const SUBMIT_UNREACHABLE =
   "Couldn't reach the server. Check your connection and try again (reload the page to see whether the month was submitted).";
 
 /**
- * Saves pending changes, then asks the server whether the month can be submitted; reports each step. The
- * stored values it returns replace untouched entries, so the declaration shows exactly what is stored. A
- * request that fails on the network ends in "check-failed" (with "Try again"), never in an endless spinner.
+ * Saves pending changes — corrections held until an edit included (e.g. total revenue recalculated from the
+ * revenue segments, BRD B30), so the server checks what the form shows — then asks the server whether the
+ * month can be submitted; reports each step. The stored values it returns replace untouched entries, so the
+ * declaration shows exactly what is stored. A request that fails on the network ends in "check-failed" (with
+ * "Try again"), never in an endless spinner.
  */
 export async function runReviewCheck(
   store: Pick<DraftStore, "flush" | "getSnapshot" | "syncFromServer">,
@@ -254,7 +256,7 @@ export async function runReviewCheck(
   report: (step: ReviewStep) => void,
 ): Promise<void> {
   try {
-    const saved = await store.flush();
+    const saved = await store.flush({ includeHeld: true });
     if (!saved) {
       report({ kind: "save-failed", message: store.getSnapshot().error ?? "Please try again." });
       return;

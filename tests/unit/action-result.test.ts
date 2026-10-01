@@ -111,6 +111,22 @@ describe("toActionError", () => {
     expect(toActionError(new TypeError("fetch failed"))).toEqual({ ok: false, error: MESSAGES.network });
   });
 
+  it("says the platform is being updated when the database is behind the app (a migration not pushed yet)", () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const [code, message] of [
+      ["42703", 'column revenue_segments.kind does not exist'],
+      ["42P01", 'relation "public.access_links" does not exist'],
+      ["42883", "function public.set_cycle_settings(integer) does not exist"],
+      ["PGRST202", "Could not find the function public.set_company_revenue_segments in the schema cache"],
+      ["PGRST204", "Could not find the 'kind' column of 'revenue_segments' in the schema cache"],
+      ["PGRST205", "Could not find the table 'public.x' in the schema cache"],
+    ]) {
+      expect(toActionError(pgError(code, message)), code).toEqual({ ok: false, error: MESSAGES.outdated });
+    }
+    expect(log).toHaveBeenCalledTimes(6);
+    log.mockRestore();
+  });
+
   it("hides anything else behind a generic message (and logs it)", () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(toActionError(new Error("relation \"secret\" does not exist"))).toEqual({ ok: false, error: MESSAGES.generic });

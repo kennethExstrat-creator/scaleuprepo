@@ -52,6 +52,11 @@ export const MESSAGES = {
   session: "Your session has expired. Please sign in again.",
   notFound: "We couldn't find that item. It may have been removed.",
   invalid: "Please check the highlighted fields.",
+  /**
+   * The app expects a database change that is not deployed yet (an undefined column, table or function,
+   * e.g. a migration still to push): an operational problem, not the person's.
+   */
+  outdated: "This part of the platform is being updated. Please try again in a few minutes, and tell ScaleUp if it keeps happening.",
   generic: "Something went wrong. Please try again.",
 } as const;
 
@@ -66,7 +71,10 @@ export const MESSAGES = {
  *   `23503`/`23001` (foreign key / RESTRICT: Postgres 17 raises 23503, 18 raises 23001) → in-use
  *   message, or "Something this refers to no longer exists…" for an insert/update;
  *   `23514` (check constraint) → "One of the values isn't allowed…"; PostgREST `PGRST116` →
- *   not-found message; `PGRST301`/`PGRST303` (bad/expired JWT) → session-expired message.
+ *   not-found message; `PGRST301`/`PGRST303` (bad/expired JWT) → session-expired message; a database
+ *   that is behind the app (`42703` / `42P01` / `42883` undefined column, table or function; PostgREST
+ *   `PGRST202` / `PGRST204` / `PGRST205` not in its schema cache — e.g. a migration not pushed yet) →
+ *   "This part of the platform is being updated…" (logged on the server).
  *   For a `DataError` (src/lib/data) the database message is read from its `cause`, so the data
  *   layer's internal wording (function names, ids) is never shown.
  * - network failures → "Couldn't reach the server. Please try again."
@@ -114,6 +122,15 @@ export function toActionError(e: unknown): ActionResult<never> {
     case "PGRST301":
     case "PGRST303":
       return fail(MESSAGES.session);
+    case "42703":
+    case "42P01":
+    case "42883":
+    case "PGRST202":
+    case "PGRST204":
+    case "PGRST205":
+      // The deployed database is behind the app (a migration still to push): say so, and log it loudly.
+      console.error("[action] the database is missing something the app needs (deploy pending migrations)", e);
+      return fail(MESSAGES.outdated);
   }
 
   console.error("[action] unexpected error", e);

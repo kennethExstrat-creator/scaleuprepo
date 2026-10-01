@@ -151,8 +151,8 @@ export function PortfolioExportCard({ funds, months }: { funds: ExportFundOption
               </ToggleGroup>
               <FieldDescription id={ids.formatHint}>
                 {format === "xlsx"
-                  ? "Excel adds a Revenue segments sheet: each company's own revenue segments and ScaleUp revenue lines, month by month."
-                  : "CSV holds one row per company and month. Choose Excel to include revenue segments as well."}
+                  ? "Excel adds Revenue segments (each company's own segments and ScaleUp revenue lines), KPIs (each company KPI, month by month) and Period closes (quarter and half-year totals, with figures restated to the management accounts) sheets."
+                  : "CSV holds one row per company and month. Choose Excel to include revenue segments, KPIs and period closes as well."}
               </FieldDescription>
             </Field>
             <Field orientation="horizontal">

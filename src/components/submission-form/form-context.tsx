@@ -7,7 +7,7 @@ import { targetLabelFor } from "@/components/comments/target-labels";
 import type { SubmissionBundle, SubmissionValues, TemplateFieldRow } from "@/lib/types/domain";
 import type { ValidationIssue } from "@/lib/validation";
 
-import type { DraftValues } from "./draft";
+import type { DraftValues, EarlierSegmentFigure } from "./draft";
 import type { DraftStore } from "./draft-store";
 import type { CommentCounts } from "./presentation";
 
@@ -46,6 +46,11 @@ export type FormContextValue = {
   segmentsHref: string | null;
   /** Copies last month's value into a field (asks first when the field already has a value). */
   copyLastMonth: (field: TemplateFieldRow) => void;
+  /**
+   * Figures the month held, when the form opened, for the company's own revenue segments no longer in use
+   * (BRD B30; figuresOnRetiredCompanySegments): shown for reference in a month open for changes.
+   */
+  earlierFigures?: EarlierSegmentFigure[];
 };
 
 const FormContext = createContext<FormContextValue | null>(null);

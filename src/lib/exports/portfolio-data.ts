@@ -8,9 +8,17 @@ import type { Database } from "@/lib/supabase/database.types";
 import { exportQueryError, fetchAllPages, fetchByIdChunks } from "./fetch-all";
 import { isOpenForChanges } from "./segments";
 import {
+  buildPortfolioCloseRows,
+  buildPortfolioKpiRows,
   buildPortfolioRows,
   buildPortfolioSegmentRows,
+  type PortfolioClose,
+  type PortfolioCloseRow,
   type PortfolioFinancialRow,
+  type PortfolioKpi,
+  type PortfolioKpiMember,
+  type PortfolioKpiRow,
+  type PortfolioKpiValue,
   type PortfolioRow,
   type PortfolioSegment,
   type PortfolioSegmentRow,
@@ -36,6 +44,8 @@ export type PortfolioQuery = {
   status: PortfolioStatusFilter;
   /** Also load the revenue segment figures (the Excel "Revenue segments" sheet). */
   withSegments?: boolean;
+  /** Also load the KPI values and the period closes (the Excel "KPIs" and "Period closes" sheets). */
+  withDetails?: boolean;
 };
 
 export type PortfolioFund = { id: string; code: string; name: string };
@@ -47,6 +57,8 @@ export type PortfolioData =
       rows: PortfolioRow[];
       /** The segment figures of `rows`' months; null unless `withSegments`. */
       segmentRows: PortfolioSegmentRow[] | null;
+      /** The KPI values of `rows`' months and the closes of their companies; null unless `withDetails`. */
+      details: { kpiRows: PortfolioKpiRow[]; closeRows: PortfolioCloseRow[] } | null;
     }
   | { found: false };
 
@@ -109,6 +121,68 @@ async function loadSegmentFigures(
   return { segments, values };
 }
 
+/**
+ * The KPI values of the extract's months and the quarter / half-year closes of its companies that overlap
+ * the months asked for (BRD §10 data extract; §6.1 restated period totals).
+ */
+async function loadDetails(
+  sb: SupabaseClient<Database>,
+  rows: readonly PortfolioRow[],
+  range: { from: string | null; to: string | null },
+): Promise<{ kpiRows: PortfolioKpiRow[]; closeRows: PortfolioCloseRow[] }> {
+  const companyIds = [...new Set(rows.map((row) => row.companyId))];
+  const submissionIds = rows.flatMap((row) => (row.submissionId ? [row.submissionId] : []));
+  if (companyIds.length === 0) return { kpiRows: [], closeRows: [] };
+  const [kpis, values, closes] = await Promise.all([
+    fetchByIdChunks(companyIds, (chunk) =>
+      fetchAllPages<PortfolioKpi>(OP, "load the company KPIs", (from, to) =>
+        sb
+          .from("company_kpis")
+          .select("id, company_id, name, unit, value_type, sort_order")
+          .in("company_id", chunk)
+          .order("company_id")
+          .order("id")
+          .range(from, to),
+      ),
+    ),
+    fetchByIdChunks(submissionIds, (chunk) =>
+      fetchAllPages<PortfolioKpiValue>(OP, "load the KPI values", (from, to) =>
+        sb
+          .from("submission_kpi_values")
+          .select("submission_id, kpi_id, dimension_member_id, value_number, value_text, value_bool")
+          .in("submission_id", chunk)
+          .order("submission_id")
+          .order("id")
+          .range(from, to),
+      ),
+    ),
+    fetchByIdChunks(companyIds, (chunk) =>
+      fetchAllPages<PortfolioClose>(OP, "load the period closes", (from, to) => {
+        let request = sb
+          .from("period_closes")
+          .select(
+            "id, company_id, period_type, period_start, period_end, label, status, confirmed_at, computed_totals, restated_totals, restatement_reason",
+          )
+          .in("company_id", chunk);
+        // Closes overlapping the months asked for.
+        if (range.from) request = request.gte("period_end", range.from);
+        if (range.to) request = request.lte("period_start", range.to);
+        return request.order("company_id").order("period_start").order("id").range(from, to);
+      }),
+    ),
+  ]);
+  const memberIds = values.flatMap((value) => (value.dimension_member_id ? [value.dimension_member_id] : []));
+  const members =
+    memberIds.length > 0
+      ? await fetchByIdChunks(memberIds, (chunk) =>
+          fetchAllPages<PortfolioKpiMember>(OP, "load the KPI dimension members", (from, to) =>
+            sb.from("kpi_dimension_members").select("id, name, sort_order").in("id", chunk).order("id").range(from, to),
+          ),
+        )
+      : [];
+  return { kpiRows: buildPortfolioKpiRows(rows, kpis, members, values), closeRows: buildPortfolioCloseRows(rows, closes) };
+}
+
 /** The extract's rows (sorted by company, then month), or `found: false` for an unknown fund. */
 export async function loadPortfolioData(sb: SupabaseClient<Database>, query: PortfolioQuery): Promise<PortfolioData> {
   const [fundsRes, investmentsRes, companiesRes] = await Promise.all([
@@ -131,7 +205,13 @@ export async function loadPortfolioData(sb: SupabaseClient<Database>, query: Por
       ? null
       : investments.filter((investment) => investment.fund_id === fundId).map((investment) => investment.company_id);
   if (companyIds && companyIds.length === 0) {
-    return { found: true, fund, rows: [], segmentRows: query.withSegments ? [] : null };
+    return {
+      found: true,
+      fund,
+      rows: [],
+      segmentRows: query.withSegments ? [] : null,
+      details: query.withDetails ? { kpiRows: [], closeRows: [] } : null,
+    };
   }
 
   const from = query.from ? monthKeyToDate(query.from) : null;
@@ -190,5 +270,6 @@ export async function loadPortfolioData(sb: SupabaseClient<Database>, query: Por
     fund,
     rows,
     segmentRows: query.withSegments ? buildPortfolioSegmentRows(rows, segments, values) : null,
+    details: query.withDetails ? await loadDetails(sb, rows, { from, to }) : null,
   };
 }

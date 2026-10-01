@@ -87,7 +87,8 @@ describe("/admin/exports", () => {
     expect(html).toContain("Approved months only");
     expect(html).toContain("Excel (.xlsx)");
     // BRD B30: the Excel extract adds the revenue segments; the C4 card names both breakdowns.
-    expect(html).toContain("Excel adds a Revenue segments sheet");
+    expect(html).toContain("Excel adds Revenue segments");
+    expect(html).toContain("Period closes (quarter and half-year totals, with figures restated to the management accounts)");
     expect(html).toContain("revenue segments, ScaleUp revenue lines and key figures");
     // Nothing is chosen yet, so the downloads are disabled buttons (not links).
     expect(html).not.toContain('href="/api/exports/c4/');

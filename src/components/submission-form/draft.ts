@@ -9,7 +9,14 @@
 import { NUMBER_FIELD_TYPES, NUMBER_KPI_VALUE_TYPES, TEXT_FIELD_TYPES } from "@/lib/constants";
 import { formatNumberInput, parseNumberInput, toFiniteNumber } from "@/lib/format";
 import { parseKpiCellKey } from "@/lib/targets";
-import { segmentsForMonth, type CompanyConfig, type Json, type SubmissionValues } from "@/lib/types/domain";
+import {
+  isCompanySegment,
+  segmentsForMonth,
+  type CompanyConfig,
+  type Json,
+  type RevenueSegmentRow,
+  type SubmissionValues,
+} from "@/lib/types/domain";
 import type { FieldType, KpiValueType } from "@/lib/types/enums";
 
 // ---------------------------------------------------------------------------------------------
@@ -456,6 +463,33 @@ export function reconcileRevenueTotal(
  */
 export function reconcileWithCompanySegments(draft: DraftValues, config: Pick<CompanyConfig, "segments">): DraftValues {
   return reconcileRevenueTotal(draft, segmentsForMonth(config, draft, true).company);
+}
+
+/** A figure a month still holds for one of the company's own revenue segments no longer in use (BRD B30). */
+export type EarlierSegmentFigure = { segment: RevenueSegmentRow; amount: number };
+
+/**
+ * The figures a month open for changes still holds for the company's OWN revenue segments that are no
+ * longer in use (retired): left from when it was submitted under the old segments and then sent back or
+ * reopened after the owner changed them. They are not part of total revenue; the form shows them for
+ * reference, so they can be entered again under the current segments, and the month's next save removes
+ * them (save_submission_values). By segment order, then name; ScaleUp revenue lines are never included.
+ */
+export function figuresOnRetiredCompanySegments(
+  config: Pick<CompanyConfig, "segments">,
+  amounts: Readonly<Record<string, number | null | undefined>>,
+): EarlierSegmentFigure[] {
+  return config.segments
+    .filter((segment) => isCompanySegment(segment) && !segment.is_active)
+    .flatMap((segment) => {
+      const amount = toFiniteNumber(amounts[segment.id]);
+      return amount === null ? [] : [{ segment, amount }];
+    })
+    .sort(
+      (a, b) =>
+        a.segment.sort_order - b.segment.sort_order ||
+        a.segment.name.localeCompare(b.segment.name, "en-GB", { sensitivity: "base", numeric: true }),
+    );
 }
 
 /** Tags in the order of the field's options (unknown tags last, in their given order), without duplicates. */

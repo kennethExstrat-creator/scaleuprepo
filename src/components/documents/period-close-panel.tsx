@@ -357,6 +357,7 @@ function CloseCard({
                   variant="confirmed"
                   currency={company.currency}
                   caption={`Confirmed totals of ${close.label}`}
+                  comparison={close.revenueComparison}
                 />
                 <p className="text-xs text-muted-foreground">
                   Calculated from {close.computedTotals.months_count}{" "}
@@ -371,6 +372,7 @@ function CloseCard({
                   variant="live"
                   currency={company.currency}
                   caption={`Live totals of ${close.label}`}
+                  comparison={close.revenueComparison}
                 />
                 <p className="text-xs text-muted-foreground">
                   {close.liveTotals.months_count === 0

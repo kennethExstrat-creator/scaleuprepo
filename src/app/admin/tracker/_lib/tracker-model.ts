@@ -67,13 +67,14 @@ export const STATUS_FILTERS = [
   "submitted",
   "changes_requested",
   "approved",
+  "amendment_requested",
 ] as const;
 export type StatusFilter = (typeof STATUS_FILTERS)[number];
 
 export const STATUS_FILTER_META: Record<StatusFilter, { label: string; description: string }> = {
   needs_attention: {
     label: "Needs attention",
-    description: "Overdue, changes requested or awaiting review",
+    description: "Overdue, changes requested, awaiting review or amendment requested",
   },
   overdue: { label: OVERDUE_META.label, description: OVERDUE_META.description },
   escalated: { label: ESCALATED_META.label, description: ESCALATED_META.description },
@@ -89,6 +90,10 @@ export const STATUS_FILTER_META: Record<StatusFilter, { label: string; descripti
   approved: {
     label: SUBMISSION_STATUS_META.approved.label,
     description: SUBMISSION_STATUS_META.approved.description,
+  },
+  amendment_requested: {
+    label: "Amendment requested",
+    description: "Approved months the company owner asked to amend (BRD B8): reopen them, or answer in the thread",
   },
 };
 
@@ -215,6 +220,11 @@ export type TrackerSubmission = {
   daysOverdue: number;
   hasNarrative: boolean;
   openThreads: number;
+  /**
+   * An approved month whose owner asked to amend it and that ScaleUp has not answered yet (BRD B8; an open
+   * "Amendment requested: …" thread raised after the latest approval, isPendingAmendment). Set by the loader.
+   */
+  amendmentRequested?: boolean;
 };
 
 export type TrackerData = {
@@ -318,14 +328,25 @@ export function toTrackerSubmission(row: TrackerOverviewRow): TrackerSubmission 
 // Cells
 // ---------------------------------------------------------------------------------------------
 
-/** What a month cell shows: the status, or overdue / escalated (BRD §6.1: escalate after 14 days). */
-export type CellState = "not_submitted" | "submitted" | "changes_requested" | "approved" | "overdue" | "escalated";
+/**
+ * What a month cell shows: the status, or overdue / escalated (BRD §6.1: escalate after 14 days), or — for
+ * an approved month whose owner asked to amend it (BRD B8) — "amendment requested".
+ */
+export type CellState =
+  | "not_submitted"
+  | "submitted"
+  | "changes_requested"
+  | "approved"
+  | "amendment_requested"
+  | "overdue"
+  | "escalated";
 
 export function cellStateOf(
-  submission: Pick<TrackerSubmission, "status" | "isOverdue" | "daysOverdue">,
+  submission: Pick<TrackerSubmission, "status" | "isOverdue" | "daysOverdue" | "amendmentRequested">,
   escalationDays: number,
 ): CellState {
   if (submission.isOverdue) return submission.daysOverdue > escalationDays ? "escalated" : "overdue";
+  if (submission.status === "approved" && submission.amendmentRequested) return "amendment_requested";
   switch (submission.status) {
     case "draft":
       return "not_submitted";
@@ -343,14 +364,19 @@ export const CELL_TONES: Record<CellState, Tone> = {
   submitted: SUBMISSION_STATUS_META.submitted.tone,
   changes_requested: SUBMISSION_STATUS_META.changes_requested.tone,
   approved: SUBMISSION_STATUS_META.approved.tone,
+  amendment_requested: "warning",
   overdue: OVERDUE_META.tone,
   escalated: ESCALATED_META.tone,
 };
+
+/** The chip text of an approved month whose owner asked to amend it (BRD B8). */
+export const AMENDMENT_REQUESTED_LABEL = "Amendment requested";
 
 /** Chip text: the status label, or "Overdue · 5d" / "Escalated · 20d". */
 export function cellLabel(state: CellState, daysOverdue: number, status: SubmissionStatus): string {
   if (state === "overdue") return `${OVERDUE_META.label} · ${daysOverdue}d`;
   if (state === "escalated") return `${ESCALATED_META.label} · ${daysOverdue}d`;
+  if (state === "amendment_requested") return AMENDMENT_REQUESTED_LABEL;
   return SUBMISSION_STATUS_META[status].label;
 }
 
@@ -400,7 +426,13 @@ export function matchesStatusFilter(
     case null:
       return true;
     case "needs_attention":
-      return state === "overdue" || state === "escalated" || submission.status === "changes_requested" || submission.status === "submitted";
+      return (
+        state === "overdue" ||
+        state === "escalated" ||
+        state === "amendment_requested" ||
+        submission.status === "changes_requested" ||
+        submission.status === "submitted"
+      );
     case "overdue":
       return state === "overdue" || state === "escalated";
     case "escalated":
@@ -413,6 +445,8 @@ export function matchesStatusFilter(
       return submission.status === "changes_requested";
     case "approved":
       return submission.status === "approved";
+    case "amendment_requested":
+      return state === "amendment_requested";
   }
 }
 
@@ -437,6 +471,7 @@ export function daysToApproval(submission: Pick<TrackerSubmission, "month" | "ap
  */
 export function cellName(companyName: string, submission: Pick<TrackerSubmission, "month" | "status" | "daysOverdue">, state: CellState): string {
   let stateText: string = SUBMISSION_STATUS_META[submission.status].label;
+  if (state === "amendment_requested") stateText = `${SUBMISSION_STATUS_META.approved.label}, ${AMENDMENT_REQUESTED_LABEL.toLowerCase()}`;
   if (state === "overdue") stateText = `${OVERDUE_META.label}, ${plural(submission.daysOverdue, "day")}`;
   if (state === "escalated") stateText = `${ESCALATED_META.label}, ${plural(submission.daysOverdue, "day")} overdue`;
   return `${companyName}, ${monthLabelLong(submission.month)}: ${stateText}`;
@@ -466,6 +501,11 @@ export function cellDetails(submission: TrackerSubmission, state: CellState, not
       break;
     case "approved":
       parts.push(submission.approvedAt ? `Approved on ${formatDate(submission.approvedAt)}` : "Approved");
+      break;
+    case "amendment_requested":
+      parts.push(
+        `${submission.approvedAt ? `Approved on ${formatDate(submission.approvedAt)}` : "Approved"}; the company owner asked to amend it`,
+      );
       break;
     default:
       parts.push(statusLabel);
@@ -640,6 +680,8 @@ export type TrackerAttention = {
   escalated: number;
   awaitingReview: number;
   changesRequested: number;
+  /** Approved months whose owner asked to amend them (BRD B8). */
+  amendmentRequested: number;
 };
 
 export type FilterOption = { value: string; label: string; description?: string };
@@ -769,7 +811,7 @@ export function summariseMonth(
     if (state === "escalated") summary.escalated += 1;
     if (state === "submitted") summary.awaitingReview += 1;
     if (state === "changes_requested") summary.changesRequested += 1;
-    if (state === "approved") {
+    if (state === "approved" || state === "amendment_requested") {
       summary.approved += 1;
       const days = daysToApproval(submission);
       if (days !== null && days <= APPROVAL_TARGET_DAYS) summary.approvedWithinTarget += 1;
@@ -856,13 +898,20 @@ export function buildTracker(data: TrackerData, requested: TrackerFilters): Trac
     ),
   );
 
-  const attention: TrackerAttention = { overdue: 0, escalated: 0, awaitingReview: 0, changesRequested: 0 };
+  const attention: TrackerAttention = {
+    overdue: 0,
+    escalated: 0,
+    awaitingReview: 0,
+    changesRequested: 0,
+    amendmentRequested: 0,
+  };
   for (const submission of awaitedSubmissions) {
     const state = cellStateOf(submission, data.escalationDays);
     if (state === "overdue" || state === "escalated") attention.overdue += 1;
     if (state === "escalated") attention.escalated += 1;
     if (state === "submitted") attention.awaitingReview += 1;
     if (state === "changes_requested") attention.changesRequested += 1;
+    if (state === "amendment_requested") attention.amendmentRequested += 1;
   }
 
   const rows = reporting

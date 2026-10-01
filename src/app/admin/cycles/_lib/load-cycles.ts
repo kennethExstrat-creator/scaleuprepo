@@ -309,7 +309,7 @@ async function loadCurrentTemplateLabel(sb: Client): Promise<string | null> {
   return row && published ? `${row.name} v${published.version_no}` : null;
 }
 
-type CycleSettings = { dueDay: number; graceDays: number; escalationDays: number };
+type CycleSettings = { dueDay: number; graceDays: number; escalationDays: number; updatedAt: string | null };
 
 async function loadSettings(sb: Client): Promise<CycleSettings> {
   try {
@@ -318,10 +318,16 @@ async function loadSettings(sb: Client): Promise<CycleSettings> {
       dueDay: settings.due_day,
       graceDays: settings.backfill_grace_days,
       escalationDays: settings.escalation_days,
+      updatedAt: settings.updated_at,
     };
   } catch (e) {
     if (isNotFoundError(e)) {
-      return { dueDay: DEFAULT_DUE_DAY, graceDays: DEFAULT_BACKFILL_GRACE_DAYS, escalationDays: DEFAULT_ESCALATION_DAYS };
+      return {
+        dueDay: DEFAULT_DUE_DAY,
+        graceDays: DEFAULT_BACKFILL_GRACE_DAYS,
+        escalationDays: DEFAULT_ESCALATION_DAYS,
+        updatedAt: null,
+      };
     }
     throw e;
   }
@@ -396,6 +402,7 @@ export async function loadCycles(sb: Client): Promise<CyclesLoad> {
       dueDay: settings.dueDay,
       graceDays: settings.graceDays,
       escalationDays: settings.escalationDays,
+      settingsUpdatedAt: settings.updatedAt,
       months,
       overdue: summariseOverdue(overview, settings.escalationDays),
       openEarly: openEarlyPreview(currentMonth, openMonths, settings.dueDay, companies),

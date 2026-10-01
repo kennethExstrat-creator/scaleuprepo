@@ -1,6 +1,7 @@
 // Server-render smoke tests of the revenue segments UI (BRD B30): the portal page's editor (owners) and
 // read-only views, and the Revenue tab of the ScaleUp company page (ScaleUp revenue lines + the company's
-// own segments, read-only). Logic is unit-tested in segments-model.test.ts.
+// own segments: the owner's editor for Super Admins and Fund Admins on the owner's behalf, read-only for
+// everyone else and for companies that are no longer active). Logic is unit-tested in segments-model.test.ts.
 import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,6 +25,27 @@ vi.mock("@/lib/supabase/server", () => ({
   }),
 }));
 vi.mock("@/app/portal/[companyId]/segments/actions", () => ({ saveRevenueSegmentsAction: vi.fn() }));
+vi.mock("@/app/admin/companies/[companyId]/_components/company-segments-actions", () => ({
+  saveCompanySegmentsOnBehalfAction: vi.fn(),
+}));
+// The ScaleUp page's on-behalf editor reads what the owner's page reads: the segments of state.tables.
+vi.mock("@/app/portal/[companyId]/segments/_lib/load-segments", async () => {
+  const { partitionRevenueSegments } = await import("@/lib/types/domain");
+  return {
+    loadCurrentCompanySegments: vi.fn(),
+    loadSegmentsPage: vi.fn(async () => {
+      const parts = partitionRevenueSegments(state.tables.revenue_segments as never[]);
+      return {
+        company: { id: "c0000000-0000-4000-8000-000000000021", name: "Demo Company", status: "active" },
+        current: parts.companySegments,
+        retired: parts.retiredCompanySegments,
+        scaleupLines: parts.scaleupSegments,
+        usage: {},
+        openMonths: ["2026-09"],
+      };
+    }),
+  };
+});
 vi.mock("@/app/admin/companies/actions", () =>
   Object.fromEntries(
     [
@@ -241,8 +263,15 @@ describe("ScaleUp company page: ScaleUp revenue lines tab", () => {
     };
   });
 
-  async function renderTab(role: ScaleupRole): Promise<string> {
-    return html(await RevenueTab({ ctx: ctx(role), company: companyRow() }));
+  async function renderTab(role: ScaleupRole, status: "active" | "exited" = "active"): Promise<string> {
+    return html(await RevenueTab({ ctx: ctx(role), company: companyRow(status) }));
+  }
+
+  /** The ScaleUp revenue lines part of the tab: everything before the company's own segments. */
+  function linesPart(markup: string): string {
+    const cuts = [markup.indexOf("Company revenue segments"), markup.indexOf("own revenue segments&quot;"), markup.indexOf("own revenue segments\"")]
+      .filter((index) => index >= 0);
+    return cuts.length > 0 ? markup.slice(0, Math.min(...cuts)) : markup;
   }
 
   it("is called ScaleUp revenue lines, as the B30 brief names it", () => {
@@ -251,8 +280,7 @@ describe("ScaleUp company page: ScaleUp revenue lines tab", () => {
 
   it("manages ScaleUp revenue lines only, explaining that they need not add up", async () => {
     const markup = await renderTab("fund_admin");
-    const [lines] = markup.split("Company revenue segments");
-    const visible = text(lines);
+    const visible = text(linesPart(markup));
     expect(visible).toContain("ScaleUp revenue lines");
     expect(visible).toContain("They need not add up to total revenue");
     expect(visible).toContain("AOnePay");
@@ -280,7 +308,32 @@ describe("ScaleUp company page: ScaleUp revenue lines tab", () => {
 
   it("says so when the company has no segments of its own", async () => {
     state.tables.revenue_segments = [AONEPAY];
-    const panel = text((await renderTab("super_admin")).split("Company revenue segments")[1] ?? "");
+    const panel = text((await renderTab("partner")).split("Company revenue segments")[1] ?? "");
     expect(panel).toContain("hasn't set up revenue segments of its own, so it enters total revenue directly.");
+  });
+
+  it("lets Super Admins and Fund Admins change the company's own segments on the owner's behalf", async () => {
+    for (const role of ["super_admin", "fund_admin"] as const) {
+      const markup = await renderTab(role);
+      const own = text(markup.slice(linesPart(markup).length));
+      expect(own).toContain("Demo Company's revenue segments");
+      expect(own).toContain("on the owner's behalf");
+      expect(own).toContain("No longer used (1)");
+      expect(own).not.toContain("Read-only");
+      expect(markup).toContain('value="Retail"');
+      expect(markup.indexOf('value="Retail"')).toBeLessThan(markup.indexOf('value="Online"'));
+    }
+    // A company without segments of its own: the first set-up, worded for ScaleUp.
+    state.tables.revenue_segments = [AONEPAY];
+    const first = text(await renderTab("super_admin"));
+    expect(first).toContain("Set up Demo Company's revenue segments");
+    expect(first).toContain("each month the company enters revenue per segment");
+  });
+
+  it("keeps the company's own segments read-only for other roles and for companies no longer active", async () => {
+    for (const markup of [await renderTab("partner"), await renderTab("viewer"), await renderTab("fund_admin", "exited")]) {
+      expect(markup).not.toContain('value="Retail"');
+      expect(text(markup)).toContain("Read-only");
+    }
   });
 });

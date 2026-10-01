@@ -10,12 +10,15 @@ companies, MFA and the terms of use enforced in SQL, and an append-only audit lo
 | `migrations/20260930000100_schema.sql` | Enums, the 27 tables (incl. `access_links`), constraints and indexes (§2.1, §2.2) |
 | `migrations/20260930000200_helpers.sql` | `private` helpers used by policies (`today_myt`, `mfa_ok`, `terms_ok`, `is_active_user`, `is_scaleup`, `can_view_company`, …) and integrity triggers (updated_at, company config, `company_internal` guard, access-link guard and issuer rule, comments, documents, template guard, `handle_new_user`, email sync) |
 | `migrations/20260930000300_audit.sql` | `private.audit_row_change()` on every business table (not `access_links`), append-only guard, `public.log_audit_event()` |
-| `migrations/20260930000400_rls.sql` | RLS enabled on every table + all policies (§2.7); `access_links` has none (service role only); company users never see ScaleUp staff profiles |
+| `migrations/20260930000400_rls.sql` | RLS enabled on every table + all policies (§2.7); `access_links` has none (service role only); company users never read ScaleUp staff profiles (names only, through `staff_display_names()`) |
 | `migrations/20260930000500_rpc.sql` | Business rules: periods, saving, validation, workflow, comments, period close, access links (`claim_access_link`, service role only), settings (`get_client_settings`), profiles, templates, companies (§2.4, §2.6) |
 | `migrations/20260930000600_views.sql` | `v_submission_financials`, `v_submission_overview` (`security_invoker`) |
 | `migrations/20260930000700_storage.sql` | Private `company-documents` bucket + `storage.objects` policies (§2.8) |
 | `migrations/20260930000800_grants.sql` | Revokes everything from `anon`/`authenticated`/`PUBLIC`, grants back only what RLS needs, and makes objects created by later migrations closed by default |
 | `migrations/20260930000900_cron.sql` | Optional daily `open_due_periods()` at 00:05 MYT via pg_cron (no-op where pg_cron is unavailable) |
+| `migrations/20261001000100_decisions_b28_b29.sql` | B28: `staff_display_names(p_ids)` (ScaleUp staff shown to company users as "Name (ScaleUp)", never email or role); B29: `platform_settings.owner_contributor_limit` (default 4, in `get_client_settings()`) and the `company_members` contributor-limit trigger |
+| `migrations/20261001000200_revenue_segments_b30.sql` | B30: `revenue_segments.kind` (`company` / `scaleup`) and `retired_at`, partial unique index on active names, guard trigger, `set_company_revenue_segments()`, validation for both kinds, active-segment-only saves |
+| `migrations/20261001000300_revenue_total_from_segments.sql` | B30 hardening: `revenue_total` of open months recalculated from the company's segments (`save_submission_values`, `set_company_revenue_segments`); optional `p_expected_ids` optimistic check |
 | `seed.sql` | Settings, SV1/SFF funds, template "Portfolio Update" v1 (published), the launch portfolio (BRD Appendix A: 18 companies — the pilot Batik Boutique, RECQA and Kiddocare reporting from July 2026, the rest "Not yet reporting"; every company mapped to its fund, SV1 7 / SFF 11) and the KPIs of Batik Boutique, Kiddocare and Huddle. Fixed UUIDs. Safe to re-run: settings, template and `company_internal` rows are ensured; bootstrap blocks run once (`private.seed_markers`: `funds_v1`, `pilot_companies_v1`, `portfolio_h1_2026_v1`). No users. |
 | `config.toml` | Supabase CLI config (`db push`, seed path, local-dev Auth settings) |
 | `certs/prod-ca-2021.crt` | Supabase's root CA ("Supabase Root 2021 CA", sha256 `80:70:25:AD:50:D4:ED:21:9D:2C:9C:7D:29:9C:00:4F:82:4E:B0:0C:F7:F6:5A:FE:F6:07:D0:7B:72:E6:CA:FA`, valid to 2031) — the file behind Dashboard → Database → Settings → SSL configuration → *Download certificate*. Used to verify the database server's TLS certificate (`db:verify`, `db push`); compare the fingerprint with the one you download |
@@ -191,17 +194,32 @@ project runs PostgREST 14; postgrest-js treats 13 and 14 alike).
   own profile and `get_client_settings()` are readable). Bumping `terms_version` makes everyone
   accept again.
 - **Platform settings** are ScaleUp-only (BRD B27). Every signed-in session — also aal1 and
-  terms-pending ones — reads `require_mfa`, `terms_version`, `declaration_text` and `due_day` with
+  terms-pending ones — reads `require_mfa`, `terms_version`, `declaration_text`, `due_day` and `owner_contributor_limit` with
   `rpc('get_client_settings')` (one row; use `.maybeSingle()`).
 - **Partner-in-charge** is ScaleUp-internal (BRD §6.3, B24): `company_internal.partner_in_charge_id`.
   Every company has exactly one `company_internal` row (created with the company; update it, never
   insert or delete); only Super Admins change the partner (42501 "Only Super Admins can assign the
   partner-in-charge." otherwise).
-- **ScaleUp staff are anonymous to company users** (BRD B24, B28): only the partner-in-charge or a
-  Super Admin approves, so an approver's name or role would reveal the partner-in-charge. Company users
-  cannot read any ScaleUp staff profile; ids such as `submissions.approved_by`,
-  `submission_events.actor_id` or `comments.author_id` resolve to nothing for them. Show "ScaleUp" on
-  the company side (the data layer's timeline actors are null there).
+- **ScaleUp staff on the company side** (BRD B24, B28, decided 1 Oct 2026): company users cannot read
+  ScaleUp staff profiles (no emails, roles or the partner-in-charge assignment), but they see staff **names**
+  as "<Full name> (ScaleUp)" through `rpc('staff_display_names', { p_ids })` (data layer
+  `getStaffDisplayNames`; the bundle's timeline `actor_name` arrives resolved). Ids such as
+  `submissions.approved_by`, `submission_events.actor_id` or `comments.author_id` resolve only through
+  that function.
+- **Contributor limit** (BRD B29): `platform_settings.owner_contributor_limit` (default 4) caps the ACTIVE
+  contributors a company owner may have; pending invitations count because an invite creates the active
+  membership. The `company_members` trigger refuses the next one for owners with P0001 "Your team already
+  has n contributors. Deactivate one, or ask ScaleUp to add more."; ScaleUp and system callers are not limited.
+- **Revenue segments** (BRD B30): `revenue_segments.kind` is `company` (the owner's own segments, which add
+  up to `revenue_total`) or `scaleup` (ScaleUp revenue lines, no sum rule). Company segments change only
+  through `set_company_revenue_segments(p_company_id, p_segments, p_expected_ids default null)` (owner of
+  an active company, or Super Admin / Fund Admin on behalf): a segment with no submitted figures is renamed
+  in place, otherwise the row is retired and a new series starts; figures of OPEN months are moved or
+  cleared and their `revenue_total` recalculated; with `p_expected_ids` given, a changed id set raises
+  P0001 ("...changed by someone else. Reload..."). ScaleUp lines are written directly by Super Admin /
+  Fund Admin with `kind = 'scaleup'`. `save_submission_values` accepts active segments only and keeps
+  `revenue_total` equal to the sum of the company segments present (unless the save sets `revenue_total`
+  itself). Submitted and approved months never change.
 - **Not yet reporting** (BRD B16): `companies.reporting_start_month` null = no months are opened.
   After setting a start month, call `rpc('open_due_periods')` (or let the next tracker / portal page
   load or the daily job do it) to create the missing months (backfill grace) and closes. Clearing it

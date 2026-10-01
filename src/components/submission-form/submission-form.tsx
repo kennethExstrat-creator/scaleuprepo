@@ -37,7 +37,13 @@ import { groupIssuesByTarget, kpiCellsForMonth, validateSubmissionDraft } from "
 
 import { StatusBanners } from "./banners";
 import { ActivityCard, NumbersCheck } from "./checklist";
-import { isEmptyFieldDraft, reconcileWithCompanySegments, toDraftValues, withFieldValue } from "./draft";
+import {
+  figuresOnRetiredCompanySegments,
+  isEmptyFieldDraft,
+  reconcileWithCompanySegments,
+  toDraftValues,
+  withFieldValue,
+} from "./draft";
 import { DraftStore } from "./draft-store";
 import { FormContextProvider, type FormContextValue } from "./form-context";
 import { FormHeader } from "./form-header";
@@ -106,7 +112,9 @@ function buildBlocks(sections: TemplateSectionFull[]): Block[] {
 function createDraftStore(bundle: SubmissionBundle, editable: boolean): DraftStore {
   const saved = toDraftValues(bundle.current);
   // With the company's own revenue segments (BRD B30), total revenue is their sum; a stale stored total
-  // (e.g. after the owner removed a segment) is corrected and saved. ScaleUp revenue lines never count.
+  // (e.g. after the owner removed a segment) is corrected — and saved with the person's first edit or when
+  // they submit, never merely because the month was opened (holdUntilEdit: viewing saves nothing, and
+  // figures left on segments no longer in use stay visible until then). ScaleUp revenue lines never count.
   const initial = editable ? reconcileWithCompanySegments(saved, bundle.config) : saved;
   const fieldTypes: Record<string, FieldType> = {};
   for (const field of flattenTemplateFields(bundle.template)) fieldTypes[field.key] = field.field_type;
@@ -120,6 +128,7 @@ function createDraftStore(bundle: SubmissionBundle, editable: boolean): DraftSto
     lastSavedAt: bundle.submission.last_saved_at,
     types: { fieldTypes, kpiTypes },
     enabled: editable,
+    holdUntilEdit: true,
     save: async (payload) => {
       const result = await saveSubmissionValues({ submissionId, ...payload });
       return result.ok ? { ok: true, savedAt: result.data.savedAt } : { ok: false, error: result.error };
@@ -162,17 +171,24 @@ function SubmissionFormView({
 
   // --- Draft and autosave ---------------------------------------------------------------------
   const [store] = useState(() => createDraftStore(bundle, editable));
+  // Figures the month still holds for revenue segments no longer in use (it was sent back or reopened after
+  // the owner changed the segments, BRD B30). Captured when the form opens, so they stay in view after the
+  // month's next save removes them.
+  const [earlierFigures] = useState(() =>
+    isEditableStatus(submission.status) ? figuresOnRetiredCompanySegments(bundle.config, bundle.current.segments) : [],
+  );
   /** Set when the person chose to reload after a failed save (no "unsaved changes" prompt then). */
   const reloading = useRef(false);
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 
   // Newer server values (the page re-rendered after a save, a co-worker's edits) replace untouched entries.
   // The company's revenue segments may have changed too since the form opened (BRD B30: the owner removed
-  // or renamed one on the segments page): total revenue then follows the segments now in use, and the
-  // corrected total is autosaved like any other change (update() does nothing when it is already right).
+  // or renamed one on the segments page): total revenue then follows the segments now in use. The
+  // corrected total is a correction, not an edit (adjust): it is saved with the person's changes, or when
+  // they submit — opening or viewing a month never saves anything by itself.
   useEffect(() => {
     store.syncFromServer(toDraftValues(bundle.current), bundle.submission.last_saved_at);
-    if (editable) store.update((draft) => reconcileWithCompanySegments(draft, bundle.config));
+    if (editable) store.adjust((draft) => reconcileWithCompanySegments(draft, bundle.config));
   }, [store, bundle, editable]);
 
   useEffect(() => {
@@ -354,6 +370,7 @@ function SubmissionFormView({
       audience === "company" && mode !== "on_behalf" && canSubmit && company.status === "active"
         ? `/portal/${company.id}/segments`
         : null,
+    earlierFigures,
   };
 
   const overdue = isOverdueSubmission(submission, company, today);

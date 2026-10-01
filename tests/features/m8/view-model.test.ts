@@ -11,6 +11,7 @@ import {
   periodKey,
   periodOptionsBetween,
   personLabel,
+  revenueComparison,
   staffIdsToResolve,
   summarisePortfolio,
   upcomingClose,
@@ -184,6 +185,57 @@ describe("liveCloseTotals", () => {
   it("ignores months before the reporting start and outside the period", () => {
     const series = [...financials(["submitted", "submitted", "submitted"]), { ...financials(["submitted"])[0], month: "2026-10-01" }];
     expect(liveCloseTotals(q3, "2026-08-01", series).months_count).toBe(2);
+  });
+});
+
+describe("revenueComparison (BRD §6.1: QoQ and HoH growth)", () => {
+  const point = (month: string, revenue: number, status: FinancialRecord["status"] = "approved"): FinancialRecord => ({
+    month,
+    status,
+    revenue_total: revenue,
+    gross_profit: null,
+    net_profit: null,
+    cash_in_bank: null,
+    burn_rate: null,
+    headcount_ft: null,
+    headcount_pt: null,
+  });
+  const q2 = ["2026-04-01", "2026-05-01", "2026-06-01"].map((month) => point(month, 100));
+  const q3 = ["2026-07-01", "2026-08-01", "2026-09-01"].map((month) => point(month, 150));
+
+  it("compares a complete quarter with the complete quarter before it", () => {
+    expect(revenueComparison(close({ id: "q3" }), [], [...q2, ...q3])).toEqual({
+      kind: "QoQ",
+      previousLabel: "Q2 2026",
+      previousRevenue: 300,
+      revenue: 450,
+      growthPct: 50,
+    });
+  });
+
+  it("says nothing while either period is incomplete (not every month submitted)", () => {
+    expect(revenueComparison(close({ id: "q3" }), [], [...q2, q3[0], q3[1]])).toBeNull();
+    expect(revenueComparison(close({ id: "q3" }), [], [...q2, q3[0], q3[1], point("2026-09-01", 150, "changes_requested")])).toBeNull();
+    expect(revenueComparison(close({ id: "q3" }), [], [q2[1], q2[2], ...q3])).toBeNull();
+  });
+
+  it("uses a confirmed close's figures, restated ones included", () => {
+    const confirmedQ2 = close({
+      id: "q2",
+      period_start: "2026-04-01",
+      period_end: "2026-06-30",
+      label: "Q2 2026",
+      status: "confirmed",
+      computed_totals: { months_count: 3, revenue_total: 300 },
+      restated_totals: { revenue_total: 360 },
+    });
+    expect(revenueComparison(close({ id: "q3" }), [confirmedQ2], q3)).toMatchObject({
+      previousLabel: "Q2 2026",
+      previousRevenue: 360,
+      growthPct: 25,
+    });
+    const half = close({ id: "h2", period_type: "half", period_start: "2026-07-01", period_end: "2026-12-31", label: "H2 2026" });
+    expect(revenueComparison(half, [], [...q2, ...q3])).toBeNull(); // H1 2026 and H2 2026 are incomplete
   });
 });
 

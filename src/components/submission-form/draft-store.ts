@@ -3,6 +3,12 @@
 // unsaved changes after a failure (retry, or the next change tries again) and adopts newer server values
 // for entries the person has not touched. Framework-free: the form reads it with useSyncExternalStore
 // (subscribe / getSnapshot); unit tests drive it with fake timers (tests/features/m5).
+//
+// With `holdUntilEdit` (the monthly form, BRD B30), corrections the form makes by itself — total revenue
+// recalculated from the company's own revenue segments (`adjust`) — are HELD: merely opening or viewing
+// a month saves nothing (no audit entry, and figures the month still holds for segments no longer in use
+// stay until the person has seen them). Held corrections go out with the person's first edit, or when
+// they submit (`flush({ includeHeld: true })`); leaving the page does not send them.
 
 import { parseInstant } from "@/lib/periods";
 
@@ -56,6 +62,12 @@ export type DraftStoreOptions = {
   save: SaveFunction;
   /** False for read-only forms: nothing is ever saved. */
   enabled: boolean;
+  /**
+   * Hold the changes the form starts with (`initial` ≠ `saved`) and those made with `adjust()` until the
+   * person edits something (`update()`) or submits (`flush({ includeHeld: true })`). Default false: they
+   * are saved like any other change.
+   */
+  holdUntilEdit?: boolean;
   debounceMs?: number;
 };
 
@@ -79,6 +91,8 @@ export class DraftStore {
   private readonly save: SaveFunction;
   private readonly enabled: boolean;
   private readonly debounceMs: number;
+  /** Autosave is armed: the person has edited (or nothing is held). Held changes are not saved before. */
+  private armed: boolean;
 
   constructor(options: DraftStoreOptions) {
     this.draft = options.initial;
@@ -89,6 +103,7 @@ export class DraftStore {
     this.save = options.save;
     this.enabled = options.enabled;
     this.debounceMs = options.debounceMs ?? AUTOSAVE_DEBOUNCE_MS;
+    this.armed = !options.holdUntilEdit;
     this.snapshot = this.buildSnapshot();
   }
 
@@ -105,13 +120,31 @@ export class DraftStore {
 
   // --- Editing --------------------------------------------------------------------------------
 
-  /** Applies an edit to the draft and schedules a save. */
+  /** Applies the person's edit to the draft and schedules a save (with any held corrections). */
   update(recipe: (draft: DraftValues) => DraftValues): void {
     const next = recipe(this.draft);
     if (next === this.draft) return;
     this.draft = next;
+    this.armed = true;
     this.emit();
     this.schedule();
+  }
+
+  /**
+   * Applies a correction the form makes by itself (e.g. total revenue recalculated from the revenue
+   * segments). Saved like an edit once the person has edited; held until then (`holdUntilEdit`).
+   */
+  adjust(recipe: (draft: DraftValues) => DraftValues): void {
+    const next = recipe(this.draft);
+    if (next === this.draft) return;
+    this.draft = next;
+    this.emit();
+    if (this.armed) this.schedule();
+  }
+
+  /** Changes are held until the person edits (`holdUntilEdit`, nothing edited yet). */
+  isHolding(): boolean {
+    return !this.armed;
   }
 
   /** Marks an input whose text cannot be saved (message) or clears the mark (null). */
@@ -128,18 +161,23 @@ export class DraftStore {
     this.emit();
   }
 
-  /** Changes not saved yet, a save in flight, or inputs that cannot be saved. */
+  /** Changes not saved yet (held corrections do not count), a save in flight, or inputs that cannot be saved. */
   hasUnsavedWork(): boolean {
     return (
-      this.inflight !== null || hasChanges(diffDraft(this.saved, this.draft)) || Object.keys(this.invalid).length > 0
+      this.inflight !== null ||
+      (this.armed && hasChanges(diffDraft(this.saved, this.draft))) ||
+      Object.keys(this.invalid).length > 0
     );
   }
 
   // --- Saving ---------------------------------------------------------------------------------
 
-  /** Call once mounted in the browser: saves changes the form started with (never on the server). */
+  /**
+   * Call once mounted in the browser: saves changes the form started with (never on the server) — unless
+   * they are held until the person edits (`holdUntilEdit`).
+   */
   start(): void {
-    if (this.enabled && hasChanges(diffDraft(this.saved, this.draft))) this.schedule();
+    if (this.enabled && this.armed && hasChanges(diffDraft(this.saved, this.draft))) this.schedule();
   }
 
   /** Cancels a scheduled save (e.g. on unmount, after flush()). */
@@ -154,11 +192,16 @@ export class DraftStore {
 
   /**
    * Saves every change now (waiting for a save in flight first). Resolves true when everything is saved,
-   * false when a save failed (the changes are kept; `error` explains why).
+   * false when a save failed (the changes are kept; `error` explains why). Held corrections (nothing edited
+   * yet, `holdUntilEdit`) are only sent with `includeHeld` — before submitting; leaving the page sends nothing.
    */
-  async flush(): Promise<boolean> {
+  async flush(options: { includeHeld?: boolean } = {}): Promise<boolean> {
     this.clearTimer();
     if (!this.enabled) return true;
+    if (!this.armed) {
+      if (!options.includeHeld) return true;
+      this.armed = true;
+    }
     for (let round = 0; round < MAX_FLUSH_ROUNDS; round++) {
       if (this.inflight) {
         await this.inflight.promise;
@@ -263,7 +306,8 @@ export class DraftStore {
   // --- Snapshot -------------------------------------------------------------------------------
 
   private buildSnapshot(): DraftSnapshot {
-    const unsaved = countChanges(diffDraft(this.saved, this.draft));
+    // Held corrections are not "unsaved changes" of the person (nothing to warn about when leaving).
+    const unsaved = this.armed ? countChanges(diffDraft(this.saved, this.draft)) : 0;
     // A failure only matters while there is something left to save (e.g. not after undoing the change).
     if (unsaved === 0 && this.inflight === null) this.error = null;
     const status: DraftStatus = this.inflight

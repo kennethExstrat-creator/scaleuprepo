@@ -13,6 +13,7 @@ vi.mock("@/app/admin/cycles/actions", () => ({
   createFxRateAction: vi.fn(async () => ({ ok: true, data: {} })),
   updateFxRateAction: vi.fn(async () => ({ ok: true, data: {} })),
   deleteFxRateAction: vi.fn(async () => ({ ok: true, data: {} })),
+  updateCycleSettingsAction: vi.fn(async () => ({ ok: true, data: { updatedAt: "2026-10-01T00:00:00Z" } })),
 }));
 vi.mock("@/app/admin/settings/actions", () => ({
   updateSettingsAction: vi.fn(async () => ({ ok: true, data: { changed: true } })),
@@ -99,7 +100,8 @@ describe("cycles workspace", () => {
     const html = renderCycles("months");
     expect(html).toContain("Reporting cycles");
     expect(html).toContain("due on the 15th of that month");
-    expect(html).toContain("Change these in Settings");
+    expect(html).toContain("Change cycle settings");
+    expect(html).toContain("All settings");
     expect(html).toContain("Open Oct 2026 early");
     expect(html).toContain("Extend a deadline");
     expect(html).toContain("September 2026");
@@ -195,7 +197,8 @@ describe("cycles workspace", () => {
     expect(html).not.toContain("Open Oct 2026 early");
     expect(html).not.toContain("Extend a deadline");
     expect(html).not.toContain("Add rate");
-    expect(html).not.toContain("Change these in Settings");
+    expect(html).not.toContain("Change cycle settings");
+    expect(html).not.toContain("All settings");
     expect(html).not.toContain("Edit the USD rate");
     expect(html).not.toContain("Change history");
   });

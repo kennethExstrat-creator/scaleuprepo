@@ -45,6 +45,15 @@ Phase 1 scope = BRD §4 Phasing item 1 + every module marked Phase 1 in BRD §8 
 > §5 the shared APIs the modules added, §5.7 the props as built and §6 the cross-module rules settled during
 > integration (months still requested, open-month totals, deadline extension limits, export navigations). No
 > database change: the B30 migration above is still the only one to push. See §7.
+> **Gap fixes (1 Oct 2026; items marked "(gap fixes)"):** the historical months import (BRD B3: `scripts/import-history.ts`,
+> dry run by default), ScaleUp editing a company's own revenue segments on the owner's behalf, figures of a month sent back
+> after a segment change shown instead of lost (and no autosave on merely opening a month), open-month totals on the
+> history page, amendment requests on the tracker and review page (B8), QoQ / HoH growth, KPI and period-close sheets in
+> the portfolio extract and confirmed half-year closes in the C4 workbook, the reporting-cycle settings for Fund Admins
+> (`set_cycle_settings`, B10) and two-factor authentication that can no longer be switched off (B11), a backups runbook
+> (`docs/backups-runbook.md`) and a clear message while the database is behind the app. New migration
+> `20261001000500_cycle_settings_and_mfa_guard.sql` (**to push**). Pending pushes, in order: `20261001000200` (B30),
+> `20261001000300_revenue_total_from_segments.sql` (B30 hardening, another step) and `20261001000500`. See §7.
 
 ---
 
@@ -96,7 +105,7 @@ Company roles live on `company_members.role` (`owner | contributor`); a person c
 | Manage funds, companies, users, platform settings | Yes | No | No | No | No | No |
 | Manage templates, company KPIs, revenue segments, FX rates **(B30: "revenue segments" = ScaleUp revenue lines, `kind = 'scaleup'`)** | Yes | Yes | No | No | No | No |
 | Define the company's own revenue segments **(B30, new; `set_company_revenue_segments`, active companies only)** | On behalf (logged) | On behalf (logged) | No | No | Yes | No (read only) |
-| Open months early, extend deadlines **(updated: deadlines of active companies only)** | Yes | Yes | No | No | No | No |
+| Open months early, extend deadlines **(updated: deadlines of active companies only)**; **(gap fixes, B10)** set the cycle settings — due day, grace period, escalation (`set_cycle_settings`) | Yes | Yes | No | No | No | No |
 | Enter data, upload files | No | On behalf (logged) | No | No | Yes | Yes |
 | Submit / resubmit month; confirm period close; request amendment | No | No (fund admin may confirm period close on behalf) | No | No | Yes | No |
 | Comment (start threads), request changes **(updated: request changes on active companies only)** | Yes | Yes | Yes (any company) | No | Reply only | Reply only |
@@ -111,7 +120,10 @@ Company roles live on `company_members.role` (`owner | contributor`); a person c
 | Invite users | Any | No | No | No | Contributors of own company **(updated: access links only for contributors who belong to no other company, BRD B29; (decisions 2026-10-01) up to `owner_contributor_limit` active contributors, default 4)** | No |
 
 Company users **never** see: other companies, `company_internal` (incl. the partner-in-charge), `fund_investments`, internal comments, the audit log **(updated:)**, the full `platform_settings` or **ScaleUp staff profiles** (emails, roles; see the partner-in-charge rules below). **(decisions 2026-10-01, BRD B28)** They see ScaleUp people by name with a "(ScaleUp)" label — "Renuka Sena (ScaleUp)" — through `staff_display_names()` only.
-**2FA** (TOTP) is required for everyone when `platform_settings.require_mfa` is true (default). The database enforces it too:
+**2FA** (TOTP) is required for everyone when `platform_settings.require_mfa` is true (default). **(gap fixes, BRD §11, B11)**
+It can no longer be switched off in the app: Settings only turns it (back) on, and trigger `platform_settings_mfa_guard`
+refuses `true → false` for every signed-in user (system callers only: the operators' emergency path); a person who lost
+their authenticator gets a 2FA reset on `/admin/users` instead. The database enforces 2FA too:
 helper functions only grant access when the JWT `aal` claim is `aal2` (see `private.mfa_ok()`).
 
 **(updated) Rules as built** (database and `src/lib/auth/permissions.ts` agree; `tests/db/permissions-parity.test.ts` checks every helper against the real policies and RPCs for every role):
@@ -131,7 +143,9 @@ helper functions only grant access when the JWT `aal` claim is `aal2` (see `priv
   written-off companies are read-only for everyone (the read-only P0001). **(updated, integration)** Permission helper
   `canManageCompanySegments(ctx, companyId, companyStatus?)` (§5.2): owner of an active company, or Super Admin / Fund
   Admin while the company is active (`tests/db/permissions-parity.test.ts` checks it against the RPC). The portal page
-  uses it; the ScaleUp company page shows the company's own segments read-only (no on-behalf editor yet). ScaleUp
+  uses it; **(gap fixes)** the ScaleUp company page (`?tab=revenue`) gives Super Admins and Fund Admins the owner's editor
+  on the owner's behalf (`saveCompanySegmentsOnBehalfAction`, same comparability warning; partners, viewers and companies
+  no longer active see the segments read-only). ScaleUp
   revenue lines (`kind = 'scaleup'`) stay with `canManageTemplates`.
 - Users with history cannot be hard-deleted (foreign keys without `ON DELETE`): deactivate with `admin_update_profile(p_is_active => false)` and ban in Supabase Auth.
 
@@ -160,8 +174,11 @@ pins their sha256) — and **(decisions 2026-10-01)** `20261001000100_decisions_
 too: `staff_display_names()`, `platform_settings.owner_contributor_limit`, `get_client_settings()` with that column, the
 contributor-limit trigger) and **(B30)** `20261001000200_revenue_segments_b30.sql` (**to push**: `revenue_segments.kind` /
 `retired_at`, the partial unique name index, trigger `revenue_segments_guard`, RLS for `kind = 'scaleup'` writes,
-`set_company_revenue_segments()`, the new segment rules of `validate_submission()` and `save_submission_values()`). Every
-later database change is a NEW file `<YYYYMMDDHHMMSS>_<name>.sql` sorting after the last one, then `npm run db:types`.
+`set_company_revenue_segments()`, the new segment rules of `validate_submission()` and `save_submission_values()`), then
+`20261001000300_revenue_total_from_segments.sql` (B30 hardening, **to push**) and **(gap fixes)**
+`20261001000500_cycle_settings_and_mfa_guard.sql` (**to push**: `set_cycle_settings()`, trigger
+`platform_settings_mfa_guard`). Every later database change is a NEW file `<YYYYMMDDHHMMSS>_<name>.sql` sorting after the last
+one, then `npm run db:types`.
 **(updated)** Verified on the hosted Postgres 17.6 with `npm run db:verify`: **(decisions 2026-10-01)** it replays in one
 rolled-back transaction exactly what `db push --include-seed` would run next — the migrations not yet recorded in
 `supabase_migrations.schema_migrations` (on an empty database: all of them), then the seed — refuses (FAIL) recorded versions the
@@ -231,6 +248,11 @@ TypeScript mirrors: `src/lib/types/enums.ts` (`SCALEUP_ROLES`, `CompanyRole`, �
 **(decisions 2026-10-01, BRD B29)** `owner_contributor_limit smallint not null default 4` (constraint
 `platform_settings_owner_contributor_limit_check`: between 0 and 100) — the most **active** contributors a company owner can
 have; ScaleUp can add more (§1; trigger on `company_members`). M4's settings page edits it (Super Admin).
+**(gap fixes)** Super Admins **and Fund Admins** change `due_day`, `backfill_grace_days` and `escalation_days` with
+`set_cycle_settings()` (§2.4; /admin/cycles "Change cycle settings"); the row itself stays Super Admin only (RLS). Trigger
+`platform_settings_mfa_guard` (before update of `require_mfa`; `private.platform_settings_mfa_guard()`): `require_mfa` can be
+switched on by anyone allowed to update the row, but off only by a system caller (P0001 "Two-factor authentication is
+required for everyone and can't be turned off. …").
 **(updated)** Readable by ScaleUp staff only (BRD B27). Every signed-in session — also aal1, terms-pending and
 deactivated ones — reads `require_mfa`, `terms_version`, `declaration_text`, `due_day` **and (decisions 2026-10-01)
 `owner_contributor_limit`** with `get_client_settings()` (§2.4).
@@ -486,7 +508,7 @@ token hash with the admin client); the Server Action hashes the token and **clai
 `admin.rpc('claim_access_link', { p_token_hash }).maybeSingle()` (§2.4; no row = expired, used, revoked, deactivated account
 or issuer no longer allowed → "ask ScaleUp (or your company owner) for a new link") — then `admin.generateLink({ type:
 'magiclink', email })` with the returned email, `verifyOtp({ type: 'magiclink', token_hash })` on the server client, calls
-`startIdleClock()` and redirects to `/set-password` (invite) or `/mfa` (sign-in). Never check-then-set `used_at` yourself
+`startIdleClock()` and redirects to `/set-password` (invite) or `/mfa` (sign-in; **(updated, integration)** as built `/mfa?next=/set-password`, BRD B23). Never check-then-set `used_at` yourself
 (two concurrent requests could both pass the check). A claimed link is used up even if signing in then fails (e.g. Supabase
 Auth unavailable): show "ask for a new link".
 
@@ -524,6 +546,7 @@ messages read `"Sep 2026"`, dates `"30 Sep 2026"`. Arguments with a default are 
 | `open_period(p_month date) returns uuid` **(updated)** | super_admin, fund_admin (or system) | Opens one month early (e.g. current month) with the same side effects; returns the period id. `p_month` is normalised to the 1st; months after the current MYT month (`"Only months up to the current month (Oct 2026) can be opened."`) or before the earliest start month are refused. Re-opening an open month is a no-op. |
 | `save_submission_values(p_submission_id uuid, p_values jsonb default '[]', p_segments jsonb default '[]', p_kpis jsonb default '[]') returns timestamptz` **(updated)** | company member of an **active** company, or fund_admin (on behalf); super_admin/partner/viewer → 42501 | Only when status is `draft` or `changes_requested` (else P0001 `"Sep 2026 has been submitted and is awaiting review, so it can no longer be edited."` / `"… is approved and locked. Request an amendment if something needs to change."`). `p_values`: `[{ "key": text, "value_number"?: number, "value_text"?: text, "value_json"?: any }]` (key must exist in the submission's template version); `p_segments`: `[{ "segment_id": uuid, "amount": number \| null }]` (segment of this company, either kind; **(B30)** an amount only for an **active** segment — a retired one gives P0001 `"\"Online\" is no longer in use, so revenue can no longer be entered for it. Reload the page to see the current revenue segments."`; clearing one, amount null, is allowed; and every save also clears the month's figures for **retired company** segments — left from before it was sent back after the segments changed — ScaleUp lines' figures are kept); `p_kpis`: `[{ "kpi_id": uuid, "dimension_member_id": uuid \| null, "value_number"?, "value_text"?, "value_bool"? }]` (KPI of this company; member must belong to the KPI's dimension; null when the KPI has no dimension). Upserts; an entry whose values are all null/empty/`[]` **deletes** the row. Updates `last_saved_at/by`. Returns `last_saved_at`. Transactional: one bad entry rejects the whole save. **Input rules:** JSON numbers only (no numeric strings), \|value\| < 1e15; the value must be in the column of the field type (§2.2); text max 20,000 chars (or `validation.max_length`), blank text = empty; picklist and tag values must be in `options` (max 50 tags); rating must be a whole number within `options` min/max (default 1–5); boolean fields take JSON `true`/`false`; integer KPIs must be whole numbers (`"\"App downloads\" must be a whole number."`); KPI text ≤ 2,000 chars; half-yearly KPI values outside June/December are refused (clearing is allowed). Integer **template fields** are not refused at save — validation reports `not_integer`. |
 | `set_company_revenue_segments(p_company_id uuid, p_segments jsonb) returns setof revenue_segments` **(B30, new)** | the company **owner** (active membership) of an **active** company; Super Admin / Fund Admin on the owner's behalf (audited `on_behalf`); system callers. Anyone else → 42501 `"Only the company owner can change its revenue segments."` (before any lookup); exited / written-off company → the read-only P0001 (ScaleUp too); unknown company (ScaleUp) → P0001 `"That company was not found."` | Sets the **complete, ordered** list of the company's own segments (`kind = 'company'`): `p_segments = [{ "id"?: uuid, "name": text }, …]`, 0–50 items (P0001 `"Send the revenue segments as a list."`, `"A company can have at most 50 revenue segments."`), names trimmed of spaces / tabs / line breaks, 1–80 characters, no line breaks or tabs inside, unique ignoring case (`"Each revenue segment needs a name."`, `"Revenue segment names can be at most 80 characters."`, `"Revenue segment names cannot contain line breaks or tabs."`, `"There are two revenue segments called \"Online\". Give each segment a different name."`, `"Each revenue segment can only be listed once."`); ids must be the company's **current active company segments** (else `"The revenue segments have changed since this page was opened. Reload the page and try again."`). Per item: same name (exact) → keeps its id, `sort_order` = position (1-based); new name → **renamed in place** if the segment has no figures in a submitted or approved month, otherwise the old row is **retired** and a **new row** with the new name replaces it (a new series) and the figures of the company's months still open for changes (draft, changes requested) **move** to it; no id → added, unless a current segment of that name (ignoring case) is not listed by id — then it is that segment (taken out and put back in the form). Current segments missing from the list are **retired** and their figures in open months are **cleared**. Submitted and approved months are never changed; ScaleUp lines are untouched. Name swaps work (temporary names). Serialised per company (advisory lock; open months locked like `save_submission_values` locks them). Returns the active company segments by `sort_order`. Audited as row changes with summaries such as `Revenue segment "Online" renamed to "Web" as a new series (submitted months keep "Online")`. Data layer: `setCompanyRevenueSegments` (§5.5); UX mirrors `companySegmentListError`, `diffCompanySegments`. EXECUTE: authenticated (service role by default), never anon. |
+| `set_cycle_settings(p_due_day int, p_backfill_grace_days int, p_escalation_days int, p_expected_updated_at timestamptz default null) returns timestamptz` **(gap fixes, new; BRD A5, B10)** | super_admin, fund_admin (or system); anyone else → 42501 `"Only Super Admins and Fund Admins can change the reporting cycle settings."` | Sets exactly those three `platform_settings` columns (nothing else): due day 1–28 (`"Choose a due day from 1 to 28."`), grace period 1–365 days, escalation 0–365 days (the Settings page's ranges); with `p_expected_updated_at`, refused when the row changed since (`"Someone else changed the settings while you were editing. …"`). Unchanged values write nothing. Returns the new `updated_at`. Audited as an update of `platform_settings` by the caller (summary `"Reporting cycle settings changed: due day 15 → 20, …"`). New due dates apply to months opened from then on. EXECUTE: authenticated, never anon. |
 | `get_submission_validation(p_submission_id uuid) returns jsonb` **(updated)** | anyone who can view it (else 42501) | `{ "ok": bool, "errors": [{ "target": text, "code": text, "message": text }] }`. Codes: `required`, `negative`, `not_integer`, `out_of_range`, `sum_mismatch`, `prior_months`. Rules and order in §2.6. |
 | `submit_submission(p_submission_id uuid, p_declaration_accepted boolean) returns void` **(updated)** | company **owner** (active membership) of an **active** company | Status must be `draft`/`changes_requested`; declaration must be true; validation must be ok. Sets `submitted`, `submitted_at/by`, `declaration_text` (from settings), `revision += 1`, clears `approved_at/by`; event `submitted` (or `resubmitted` if revision > 1). Failure messages in order: `"Sep 2026 has already been submitted."` / `"… is approved and locked."`; `"Please confirm the declaration before submitting."`; the `prior_months` message if any (`"Submit earlier months first: Jul 2026, Aug 2026."`), else the single validation message, else `"Please fix N issues before submitting, starting with: <first message>"`. Call `get_submission_validation` first to show field-level errors. |
 | `request_changes(p_submission_id uuid, p_message text) returns void` **(updated)** | super_admin, fund_admin, partner (any company); **active companies only** (else P0001 read-only message) | Status `submitted` → `changes_requested`; message required (≤ 5,000 chars); event with the message. **Also:** `due_date = greatest(due_date, today MYT + backfill_grace_days)` (`original_due_date` keeps the first due date when it moves), and any **confirmed** quarter/half close covering the month is reopened (status open, `confirmed_at/by` and `computed_totals` cleared, restatement kept; audited `reopen`). |
@@ -590,7 +613,7 @@ Narrative (C4) and founder-pulse fields are optional unless an admin marks them 
 ### 2.7 RLS summary
 | Table | SELECT | INSERT / UPDATE / DELETE |
 |---|---|---|
-| platform_settings **(updated)** | ScaleUp (`is_scaleup`); everyone else uses `get_client_settings()` | update: super_admin |
+| platform_settings **(updated)** | ScaleUp (`is_scaleup`); everyone else uses `get_client_settings()` | update: super_admin; **(gap fixes)** the cycle columns also by fund_admin through `set_cycle_settings()`; `require_mfa` never back to false for signed-in users (trigger `platform_settings_mfa_guard`) |
 | profiles **(updated, second patch)** | self; ScaleUp (everyone); company users: the company-side profiles (`scaleup_role is null`) of their co-members — **never ScaleUp staff** (BRD B24: no email or role; **(decisions 2026-10-01, B28)** their names only through `staff_display_names()`) | none (RPCs) |
 | funds, fund_investments | ScaleUp | super_admin |
 | companies | `can_view_company(id)` | insert/update: super_admin (delete via RPC) |
@@ -721,7 +744,8 @@ Shared foundation files (§5) are read-only during feature work.
 | **SEG** Revenue segments UI (B30) **(updated, integration)** | `src/app/portal/[companyId]/segments/**`; inside other modules' folders: the revenue area of the monthly form (`src/components/submission-form/revenue.tsx` and its hooks in `draft.ts`, `form-context.tsx`, `sections.tsx`, `submission-form.tsx`), the admin company page's revenue tab (`revenue-tab.tsx`, `revenue-lines-editor.tsx`, `revenue-data.ts`, `company-segments-panel.tsx`, `tabs.ts` in `src/app/admin/companies/[companyId]/_components/`) and the portal sidebar's "Revenue segments" item; tests in `tests/features/seg/**` |
 
 **(updated)** Foundation regression tests every module must keep green: `npm test` (= `tests/unit`, `tests/db` and
-`tests/data`; or `npm run test:unit` / `npm run test:db` separately) — including `tests/db/mirror-parity.test.ts` (SQL
+`tests/data`, **(updated, integration)** plus every module's `tests/features/<key>/**` — `vitest run` takes all of
+`tests/**/*.test.ts`; or `npm run test:unit` / `npm run test:db` separately) — including `tests/db/mirror-parity.test.ts` (SQL
 validation / period totals = TS mirrors), `tests/db/permissions-parity.test.ts` (permission helpers = RLS/RPC checks),
 `tests/unit/action-result.test.ts` (`toActionError`), `tests/unit/proxy.test.ts` (public routes of the proxy, e.g.
 `/access/[token]`), `tests/data/*` (data layer), **(updated, second patch)** `tests/db/patch-review.test.ts` (the independent
@@ -733,7 +757,7 @@ files with BEGIN / COMMIT / END / ROLLBACK / SAVEPOINT — `scripts/sql-transact
 
 ### Route map
 - Auth: `/login`, `/forgot-password`, `/set-password`, `/mfa`, `/terms`, `/no-access`; route handlers `/auth/confirm` (verifyOtp by `token_hash` + `type`), `/auth/callback` (PKCE `code` exchange), `/auth/signout` (POST).
-  **(updated)** `/access/[token]` — **public** accept page for our own invitation / sign-in links (BRD B14, `access_links`), **owned by M2** (`src/app/access/**`): GET only renders who the link is for and an "Accept invitation" / "Sign in" button; the Server Action **(updated, second patch)** first claims the link atomically with `claim_access_link` (service role; single use even under concurrent requests), then signs the user in (`generateLink` + `verifyOtp`), calls `startIdleClock()` and redirects to `/set-password` (invite) or `/mfa` (sign-in). Links that cannot be claimed (expired, used, revoked, deactivated account, issuer no longer allowed) show "ask ScaleUp (or your company owner) for a new link".
+  **(updated)** `/access/[token]` — **public** accept page for our own invitation / sign-in links (BRD B14, `access_links`), **owned by M2** (`src/app/access/**`): GET only renders who the link is for and an "Accept invitation" / "Sign in" button; the Server Action **(updated, second patch)** first claims the link atomically with `claim_access_link` (service role; single use even under concurrent requests), then signs the user in (`generateLink` + `verifyOtp`), calls `startIdleClock()` and redirects to `/set-password` (invite) or `/mfa` (sign-in; **(updated, integration)** `/mfa?next=/set-password`). Links that cannot be claimed (expired, used, revoked, deactivated account, issuer no longer allowed) show "ask ScaleUp (or your company owner) for a new link".
   **(updated)** `/auth/confirm` is a **page + Server Action** (GET/HEAD only render an "Accept your invitation" / "Reset your password" button; `verifyOtp` runs in `confirmEmailLinkAction`; types `invite` and `recovery` only; `next` defaults to `/set-password`). `/auth/keepalive` (GET/POST, JSON) is pinged by `<IdleTimer>`. `/set-password` has two modes: a recent email-link session sets a password; any other session must enter the current password. `/forgot-password` sends reset emails only when `PASSWORD_RESET_EMAILS_ENABLED=true` (otherwise it tells people to ask ScaleUp for a new sign-in link).
 - `/` → redirect by role: ScaleUp → `/admin/tracker`; company user with one company → `/portal/<id>`; several → `/portal`; none → `/no-access`.
 - ScaleUp (`/admin`, sidebar): Tracker `/admin/tracker` · Review `/admin/review/[submissionId]` · Companies `/admin/companies`, `/admin/companies/new`, `/admin/companies/[companyId]`, on-behalf form `/admin/companies/[companyId]/updates/[month]` · Funds `/admin/funds` · Documents `/admin/documents` · Exports `/admin/exports` · Templates `/admin/templates`, `/admin/templates/[versionId]` · Cycles `/admin/cycles` · Users `/admin/users` · Audit log `/admin/audit` · Settings `/admin/settings`.
@@ -743,11 +767,15 @@ files with BEGIN / COMMIT / END / ROLLBACK / SAVEPOINT — `scripts/sql-transact
   **(B30)** Revenue segments `/portal/[companyId]/segments` — the company's own revenue segments (owners edit, with the
   comparability warning; contributors and owners of exited companies read only; built by the B30 UI step, sidebar link for
   every member). ScaleUp edits a company's own segments on the owner's behalf and its ScaleUp revenue lines on
-  `/admin/companies/[companyId]` (M1's revenue lines tab becomes `kind = 'scaleup'` only).
+  `/admin/companies/[companyId]` (M1's revenue lines tab becomes `kind = 'scaleup'` only). **(updated, integration)** As
+  built, `/admin/companies/[companyId]?tab=revenue` manages the ScaleUp revenue lines and shows the company's own segments
+  (active and retired, with the months that have figures). **(gap fixes)** Super Admins and Fund Admins of an active
+  company get the owner's editor there, on the owner's behalf (same comparability warning, audited `on_behalf`); partners,
+  viewers and companies no longer active see the read-only panel.
 - API: `GET /api/documents/[documentId]/download` (signed URL redirect) · `GET /api/exports/c4/[companyId]` (xlsx) · `GET /api/exports/portfolio?format=xlsx|csv&fund=&from=&to=` · `GET /api/exports/documents/[companyId]?closeId=` (zip).
 - **(updated, integration) Routes as built** (every page calls its own guard; page props are typed explicitly with
   `params` / `searchParams` as Promises; `npx next typegen` generates the route types). Deep-link parameters other modules use:
-  - `/admin/tracker` (every ScaleUp role; M7) `?fund=<fund code>&partner=<profile uuid>|none&status=needs_attention|overdue|escalated|not_submitted|submitted|changes_requested|approved&months=6|12&search=<text>`; cells → `/admin/review/<submissionId>`.
+  - `/admin/tracker` (every ScaleUp role; M7) `?fund=<fund code>&partner=<profile uuid>|none&status=needs_attention|overdue|escalated|not_submitted|submitted|changes_requested|approved|amendment_requested&months=6|12&search=<text>`; cells → `/admin/review/<submissionId>`. **(gap fixes, B8)** An approved month whose owner asked to amend it shows "Amendment requested" (amber, dashed) and counts as needing attention (`amendment_requested` filter; the attention line links it).
   - `/admin/review` → redirects to `/admin/tracker`; `/admin/review/[submissionId]` (every ScaleUp role; M6; 404 for unknown,
     malformed or invisible ids; drafts and months sent back render too) → "Edit on behalf"
     `/admin/companies/<id>/updates/<YYYY-MM>` (Fund Admin, active company, draft / changes requested), documents
@@ -755,19 +783,22 @@ files with BEGIN / COMMIT / END / ROLLBACK / SAVEPOINT — `scripts/sql-transact
   - `/admin/companies` (M1) `?q=&fund=<CODE>&status=active|exited|written_off&partner=<uuid>|none&reporting=yes|no` ·
     `/admin/companies/new` (Super Admin) · `/admin/companies/[companyId]?tab=overview|funds|revenue|kpis|team|internal|updates`
     (`companyTabHref(id, tab)`; the `revenue` tab is labelled "ScaleUp revenue lines" and also shows the company's own
-    segments read-only; Team → `/admin/users?company=<id>`) · `/admin/companies/[companyId]/updates/[month]` (M5: Fund Admin
+    segments — **(gap fixes)** editable on the owner's behalf by Super Admins and Fund Admins; Team → `/admin/users?company=<id>`) · `/admin/companies/[companyId]/updates/[month]` (M5: Fund Admin
     on-behalf entry, read-only "View only" for the other roles; no list page at `/admin/companies/[companyId]/updates`).
   - `/admin/funds` (M1; company counts → `/admin/companies?fund=<CODE>`) · `/admin/documents` (M8)
     `?period=Q3-2026&fund=<code>` or `?company=<id>[&period=Q3-2026|&close=<closeId>]` · `/admin/exports` (M9, every ScaleUp
     role) · `/admin/audit` (M9; super_admin, fund_admin, partner) `?company=<uuid>&actor=<text>&action=<action>&entity=<table>&from=YYYY-MM-DD&to=YYYY-MM-DD&page=N`.
   - `/admin/templates`, `/admin/templates/[versionId]` (M3; Super Admin, Fund Admin) · `/admin/cycles` (M4; Super Admin, Fund
-    Admin) `?tab=months|deadlines|closes|fx&extend=<submissionId>` · `/admin/users` (M2; Super Admin)
+    Admin) `?tab=months|deadlines|closes|fx&extend=<submissionId>` (**(gap fixes, B10)** "Change cycle settings" in the header:
+    due day, grace period and escalation through `set_cycle_settings`) · `/admin/users` (M2; Super Admin)
     `?tab=scaleup|company|pending&company=<companyId>` · `/admin/settings` (M4; Super Admin).
   - Portal (every member unless noted): `/portal/[companyId]` (M7 home) · `/portal/[companyId]/updates` and
     `/portal/[companyId]/updates/[month]` (M5; `YYYY-MM`, a full date redirects to it, anything else 404) ·
     `/portal/[companyId]/segments` (SEG) · `/portal/[companyId]/documents?close=<closeId>` (M8) · `/portal/[companyId]/team`
     (M2; sidebar for owners) · `/portal/[companyId]/history` (M7; owners get "Download my data (Excel)" →
-    `/api/exports/c4/<companyId>`).
+    `/api/exports/c4/<companyId>`; **(gap fixes, B30)** months still open for changes show total revenue as the sum of the
+    company's own segments once one has a figure, like the form, the review page and the exports — `buildHistoryRows(…,
+    openRevenue)` with `loadOpenMonthRevenue`).
   - `/access/[token]` (M2): **(updated, integration)** a claimed **sign-in** link continues to `/mfa?next=/set-password` (BRD
     B23: a sign-in link is how a forgotten password is recovered); an invitation to `/set-password`. Bare `/access` → `/login`.
   - API (M8, M9): `GET /api/documents/[documentId]/download` (302 to a 60-second signed URL, audited `download` / `documents`)
@@ -849,7 +880,7 @@ Other modules in `src/lib/auth/`: `redirects.ts` (`safeNextPath`, `firstParam`, 
 remain); an omitted `companyStatus` means active; they check roles and company state, not month/thread state):
 - `isScaleUp(ctx)`, `membershipFor(ctx, companyId): Membership | null`, `companyRoleOf(ctx, companyId): CompanyRole | null`
 - `canManagePlatform(ctx)` — super_admin · `canManageTemplates(ctx)` — super_admin, fund_admin (templates, KPIs, segments, FX)
-- `canManageCycles(ctx)` — super_admin, fund_admin (**`open_period`**, portfolio-wide) · **`canExtendDueDate(ctx, companyStatus?)`** — super_admin, fund_admin, **active companies only** (`extend_due_date`) · **`canReopenPeriodClose(ctx, companyStatus?)`** — super_admin, fund_admin, **(updated, second patch) active companies only** (`reopen_period_close`)
+- `canManageCycles(ctx)` — super_admin, fund_admin (**`open_period`**, portfolio-wide; **(gap fixes)** also `set_cycle_settings`) · **`canExtendDueDate(ctx, companyStatus?)`** — super_admin, fund_admin, **active companies only** (`extend_due_date`) · **`canReopenPeriodClose(ctx, companyStatus?)`** — super_admin, fund_admin, **(updated, second patch) active companies only** (`reopen_period_close`)
 - `canEnterData(ctx, companyId, companyStatus?: CompanyStatus)` — members of an active company; fund_admin on behalf (pass `companyStatus`; omitted = active). Also covers document uploads.
 - `canSubmit(ctx, companyId)` — owner of an active company (submit, resubmit, **request amendment**)
 - `canConfirmPeriodClose(ctx, companyId, companyStatus?)` — owner of an active company; fund_admin on behalf (active company)
@@ -875,7 +906,10 @@ network failures → "Couldn't reach the server. Please try again." · **P0001**
 **42501** → the RPC's own friendly message, but "You don't have permission to do that." for Postgres RLS/privilege text ·
 23505 → "That already exists." · **23503/23001** → "This item is in use and can't be removed." (or "Something this refers to no
 longer exists. Please reload the page and try again." for an insert/update) · 23514 → "One of the values isn't allowed…" ·
-PGRST116 → not-found message · PGRST301/PGRST303 → session expired · anything else → generic (logged). For a `DataError`
+PGRST116 → not-found message · PGRST301/PGRST303 → session expired · **(gap fixes)** 42703 / 42P01 / 42883 / PGRST202 /
+PGRST204 / PGRST205 (the database is behind the app, e.g. a migration not pushed yet) → `MESSAGES.outdated` "This part of the
+platform is being updated. Please try again in a few minutes, and tell ScaleUp if it keeps happening." (logged) · anything
+else → generic (logged). For a `DataError`
 (src/lib/data) the database message is read from its `cause`, never the data layer's own text.
 Pattern: `try { const ctx = await assertScaleUp(['super_admin']); …; if (error) throw error; revalidatePath(p); return ok(data) } catch (e) { return toActionError(e) }`.
 
@@ -1202,6 +1236,38 @@ Import these instead of re-implementing them (client-safe unless marked server-o
   (exact count on the first page, so a `max_rows` cap never truncates silently); used by the tracker and /admin/cycles.
 - **Company pages (M1):** `companyTabHref(companyId, tab)` (`src/app/admin/companies/[companyId]/_components/tabs.ts`);
   `SectionErrorBoundary` (`src/app/admin/companies/_components/section-error-boundary.tsx`, Next `catchError`, "Try again").
+- **(gap fixes) Revenue segments on behalf (SEG, M1):** `SegmentsEditor` (`src/app/portal/[companyId]/segments/_components/
+  segments-editor.tsx`) takes optional `audience?: "owner" | "scaleup"` (wording) and `saveAction?` (default the owner's
+  `saveRevenueSegmentsAction`); the ScaleUp company page passes `saveCompanySegmentsOnBehalfAction(input)`
+  (`src/app/admin/companies/[companyId]/_components/company-segments-actions.ts`; same input and result; `assertScaleUp(
+  ['super_admin', 'fund_admin'])`, `canManageCompanySegments(ctx, id, company.status)`, the same list and stale checks,
+  revalidates both sides).
+- **(gap fixes) Monthly form (M5):** `DraftStore` option `holdUntilEdit` with `adjust(recipe)` (a correction the form makes
+  by itself, e.g. total revenue recalculated from the segments: saved with the person's first `update()` or a
+  `flush({ includeHeld: true })` — the submit check — never merely on opening, viewing or leaving a month), `isHolding()`;
+  `figuresOnRetiredCompanySegments(config, amounts)` (`@/components/submission-form/draft`: figures an open month still
+  holds for the company's own segments no longer in use; the form's "Reported earlier under segments no longer in use"
+  note, captured when the form opens).
+- **(gap fixes) Amendment requests (M6, M7; BRD B8):** `@/components/review/amendment` — `AMENDMENT_PREFIX`,
+  `isAmendmentThread`, `amendmentReason`, `isPendingAmendment(month, thread)` (approved, the open shared "Amendment
+  requested: …" thread raised after the latest approval), `pendingAmendment(month, threads)`; the tracker loader's
+  `withAmendmentRequests` (`TrackerSubmission.amendmentRequested?`, cell state `amendment_requested`,
+  `TrackerAttention.amendmentRequested`); `reviewStatusSummary(status, { …, amendment })`, `ReviewSummary`
+  `amendmentRequestedAt?`.
+- **(gap fixes) Growth and closes (M8, M9; BRD §6.1):** `revenueComparison(close, closes, series)` and
+  `CloseView.revenueComparison` (`@/components/documents/view-model`: QoQ / HoH against the previous period, both complete,
+  confirmed closes with their restated figures), `TotalsTable` `comparison?`; `quarterQoq(model, month)`, `halfHoh(model,
+  period)` and `C4WorkbookInput.closes?` / `C4Close` (`@/lib/exports/c4-workbook`); portfolio extract
+  `buildPortfolioKpiRows`, `buildPortfolioCloseRows`, `PORTFOLIO_KPI_COLUMNS`, `PORTFOLIO_CLOSE_COLUMNS`,
+  `buildPortfolioWorkbook(rows, meta, segmentRows?, extraSheets?)`, `loadPortfolioData({ …, withDetails })` (→ `details`).
+- **(gap fixes) History (M7):** `buildHistoryRows(submissions, series, currency, openRevenue?)`, `OpenMonthRevenue`,
+  `loadOpenMonthRevenue(sb, companyId, openSubmissionIds)` (server-only).
+- **(gap fixes) Cycles (M4):** `updateCycleSettingsAction({ dueDay, graceDays, escalationDays, expectedUpdatedAt })`,
+  `cycleSettingsSchema`, `CYCLE_SETTINGS_LIMITS`, `CyclesData.settingsUpdatedAt?`; Settings: `MFA_ALWAYS_ON_MESSAGE`.
+- **(gap fixes) Historical months import (BRD B3; scripts, not the app):** `scripts/import-history.ts` (CLI) on
+  `scripts/lib/history-import.ts` (`loadImportContext`, `planImport`, `applyImport`, `classifyHeader`, `parseMonthCell`, …),
+  `scripts/lib/tabular.ts` (CSV / XLSX reader) and `scripts/lib/db-connect.ts` (the TLS-verified connection of db:verify);
+  tests in `tests/features/history-import`. Audit action `import` ("Imported (history)", `AUDIT_ACTION_META`).
 
 ---
 
@@ -1219,7 +1285,7 @@ Import these instead of re-implementing them (client-safe unless marked server-o
   **(updated)** Live totals with `periodTotals` over the submitted/approved months from `greatest(period_start, reporting_start_month)` — without a start month, from the company's first month with a submission in the period (same result as the stored `computed_totals`); upload flow in §2.8; confirmation needs every month submitted/approved and an uploaded management-accounts file; a month sent back reopens a confirmed close. **(updated, second patch)** Show the admins' "Reopen" action with `canReopenPeriodClose(ctx, company.status)`: confirmed closes of exited / written-off companies stay confirmed.
 - **(decisions 2026-10-01) ScaleUp people on the company side (BRD B28)** — comments (M6: authors, resolvers), timelines and approvals (M5, M6, M7: `bundle.events` already carry the names), documents and period closes (M8: `uploaded_by`, `confirmed_by`), the team page (M2: `invited_by`, who sent a link), the company home (M7: comment authors) and company-side exports (M9): show **"<full name> (ScaleUp)"** from `getStaffDisplayNames(sb, ids)` (one call per page with every id the page shows that `profiles` did not resolve), falling back to `SCALEUP_LABEL` for system actions. Never an email, a role or the partner-in-charge on the company side; ScaleUp pages keep plain names and roles from `profiles`.
 - **(decisions 2026-10-01) Team (C1, M2; BRD B29)**: owners see "N of L contributors" (`L = clientSettings.owner_contributor_limit`, `contributorSlotsLeft(N, L)` places left; N = active contributor memberships, pending invitations included). With no place left, disable "Invite" / "Reactivate" and explain with `contributorLimitMessage(N)` — check BEFORE creating the Auth account, so a refused invitation leaves no orphan account; the database's P0001 refusal still reaches the form through `toActionError`. Deactivating frees a place. Super Admins (`/admin/users`, `/admin/companies/[id]`) are not limited.
-- **(decisions 2026-10-01) Settings (A5, M4)**: a Super Admin field for `owner_contributor_limit` — "Contributors per company (owner invitations)", whole number 0–`OWNER_CONTRIBUTOR_LIMIT_MAX` (100), default `DEFAULT_OWNER_CONTRIBUTOR_LIMIT` (4), help text "The most active contributors a company owner can have, pending invitations included. ScaleUp can always add more." (a plain `platform_settings` update; 23514 outside 0–100).
+- **(decisions 2026-10-01) Settings (A5, M4)**: a Super Admin field for `owner_contributor_limit` — "Contributors per company (owner invitations)" **(updated, integration: labelled "Maximum contributors a company owner can invite" as built)**, whole number 0–`OWNER_CONTRIBUTOR_LIMIT_MAX` (100), default `DEFAULT_OWNER_CONTRIBUTOR_LIMIT` (4), help text "The most active contributors a company owner can have, pending invitations included. ScaleUp can always add more." (a plain `platform_settings` update; 23514 outside 0–100).
 - **(B30) Company revenue segments page `/portal/[companyId]/segments` (C3; owners)**: list the company's own segments
   (`config.companySegments`) with add, rename, remove and reorder, and the history (`config.retiredCompanySegments`: name and
   `retired_at`, "no longer used"). Validate with `companySegmentListError` (zod limits `REVENUE_SEGMENTS_MAX`,
@@ -1303,9 +1369,109 @@ Import these instead of re-implementing them (client-safe unless marked server-o
 - **Error boundaries:** every ScaleUp page and every company page without a boundary of its own falls back to
   `src/app/admin/error.tsx` / `src/app/portal/[companyId]/error.tsx` ("Try again", inside the layout so the sidebar stays).
 
+**(gap fixes) Rules settled while closing the completeness gaps (1 Oct 2026):**
+- **Historical months (BRD B3, §12):** months before a company's reporting start month (any ended month of a company that is
+  not reporting yet) come from the C4 workbooks through `scripts/import-history.ts` — one row per company and month
+  (`company`, `month`, template field keys, `segment:<name>`, `line:<name>`, `kpi:<name> [<member>]`), CSV or XLSX. Dry run
+  by default (everything written in one transaction that is rolled back), `--commit` to import; every row is checked first
+  (types, options, ranges, half-yearly KPIs, the company segments' sum = total revenue — total revenue is calculated from
+  them when left out), errors write nothing; months already on the platform are skipped and never changed (a re-run is
+  harmless). Imported months are **approved** (revision 1, no submitter or approver, timeline "Imported from the historical
+  workbook (<file>)"), audited as `system` with action `import`; missing reporting months are created with the platform's
+  due day and the default template's published version; segments the company does not have are added as **no longer in
+  use** only with `--create-segments` (retired after their last imported month). Usage: the script's header and
+  `supabase/README.md` (lead). They then feed YoY, QoQ / HoH, the C4 workbook and the extract like any approved month,
+  and appear on the tracker and /admin/cycles where they fall in the window.
+- **A month sent back after the owner changed the segments (B30):** the form shows the figures it still holds for segments
+  no longer in use ("Reported earlier under segments no longer in use: Online RM 400"), not part of total revenue; the
+  month's next save removes them (`save_submission_values`). Opening or viewing a month saves nothing: corrections the form
+  makes by itself (total revenue recalculated from the segments in use) are held until the person edits something, and
+  sent before the submit check (`holdUntilEdit`). A Fund Admin who only views a month no longer writes an on-behalf audit
+  row. Moving such figures to the renamed segment automatically (a `replaced_by` link) is not built (see the lead's notes).
+- **History page totals (B30):** draft and sent-back months show total revenue as the sum of the company's own segments once
+  one has a figure (the same rule as the form, the review page and the exports).
+- **Amendment requests (B8):** an approved month with an open "Amendment requested: …" thread raised after its latest
+  approval is "Amendment requested" on the tracker (needs attention; filter `amendment_requested`) and on the review page
+  (summary badge; the panel quotes the reason next to "Reopen"). Reopening the month, or resolving the thread, answers it.
+- **QoQ and HoH growth (BRD §6.1):** revenue of a whole quarter / half-year against the previous one, only when both are
+  complete (every month submitted or approved; a confirmed close counts with its restated figures): the period-close totals
+  ("Revenue vs Q2 2026 (QoQ)") and the C4 "Revenue Lines" sheet (QoQ on each quarter's last month, HoH in the half
+  columns). The C4 sheet also lists **confirmed half-year closes** (restated to the management accounts where they were,
+  with the reason as a cell note).
+- **Data extract (BRD §10):** the portfolio Excel file adds "KPIs" (long format: company, month, KPI, member, unit, type,
+  value) and "Period closes" (calculated totals stored at confirmation, restated figures, confirmed figures, reason) for the
+  companies and months exported; the CSV is unchanged.
+- **Cycle settings (BRD A5, B10):** Fund Admins set the due day, grace period and escalation on /admin/cycles
+  (`set_cycle_settings`); Super Admins also on /admin/settings. Months already open keep their due dates.
+- **Two-factor authentication (BRD §11, B11):** always on: Settings can only switch it back on; the database refuses
+  switching it off for signed-in users.
+- **Backups (BRD §11):** `docs/backups-runbook.md` — 30-day retention (PITR add-on, or an encrypted off-site daily dump),
+  a daily copy of the `company-documents` bucket (not in database backups) and the quarterly restore test with its log.
+- **A database behind the app** (a migration not pushed yet): Server Actions and exports say "This part of the platform is
+  being updated…" instead of the generic error, and log it (`toActionError`).
+
 ---
 
 ## 7. Change log **(updated, new)**
+- **2026-10-01 — gap fixes (completeness review after the integration).** New migration
+  `supabase/migrations/20261001000500_cycle_settings_and_mfa_guard.sql` — **to push** with `20261001000200` (B30) and
+  `20261001000300` (B30 hardening, another step), in that order (`npm run db:verify`, then `npm run db:push`, by the lead);
+  `npm run db:types` regenerated (`set_cycle_settings`; the optional `p_expected_ids` of 0300). No new dependency.
+  1. **Historical months import (B3):** `scripts/import-history.ts` + `scripts/lib/{history-import,tabular,db-connect}.ts`;
+     PGlite tests `tests/features/history-import/` (§6).
+  2. **B30:** on-behalf editor for a company's own segments on `/admin/companies/<id>?tab=revenue`
+     (`saveCompanySegmentsOnBehalfAction`, `SegmentsEditor` `audience` / `saveAction`); figures held on retired segments shown
+     in open months and no autosave on opening (`holdUntilEdit`, `adjust`, `figuresOnRetiredCompanySegments`); history page
+     open-month totals.
+  3. **B8:** amendment requests on the tracker and review page (`@/components/review/amendment`).
+  4. **§6.1, §10:** QoQ / HoH (period closes, C4); confirmed half-year closes in the C4 workbook; "KPIs" and "Period closes"
+     sheets in the portfolio extract.
+  5. **A5 / B10, §11 / B11:** `set_cycle_settings()` and "Change cycle settings" on /admin/cycles; 2FA can no longer be
+     switched off (Settings and trigger `platform_settings_mfa_guard`).
+  6. **Operations:** `docs/backups-runbook.md`; `toActionError` maps a database that is behind the app to
+     `MESSAGES.outdated`.
+  7. **Tests:** `tests/db/cycle-settings-mfa.test.ts`; `tests/features/history-import/*`; `tests/features/seg/
+     {on-behalf-actions,earlier-figures}.test.ts`; `tests/features/m6/amendment.test.ts`; new cases in
+     `tests/features/{seg/render,m4/actions,m4/render,m7/history-model,m7/tracker-model,m8/view-model,m9/c4-workbook,
+     m9/portfolio,m9/routes,m9/render,m9/loaders}.test.ts`, `tests/unit/action-result.test.ts`; type pins in
+     `tests/db/{types.typecheck,conformance-review.typecheck}.ts`.
+- **2026-10-01 — feature integration (all nine modules M1–M9 and the B30 segments UI).** No database change and no new
+  dependency; the B30 migration `20261001000200_revenue_segments_b30.sql` is still **to push** — and must be pushed before
+  this code runs against the hosted database (the revenue-line actions and the segments page filter on
+  `revenue_segments.kind`).
+  1. **B30 wiring:** M1's revenue-line actions are limited to `kind = 'scaleup'` (load, add with `kind: 'scaleup'`, rename,
+     move, activate, delete), so moving a line no longer renumbers the company's own segments; a reactivation refused by
+     the case-insensitive unique index gets its own message; the unused unfiltered `loadRevenueLines` in
+     `src/app/admin/companies/_components/queries.ts` was removed. Feature test fixtures gained `kind` / `retired_at` and
+     the derived `CompanyConfig` lists (`tests/features/m1/render.test.ts`, `tests/features/m5/fixtures.ts`); the M1 tab test
+     expects "ScaleUp revenue lines".
+  2. **One total for open months:** the read-only form of a month still open for changes and the review page (comparison and
+     flags, `shownFinancials`) show total revenue as the sum of the company's own segments once one has an amount, like the
+     editing form and the exports (§6).
+  3. **One rule for months still requested:** `/portal/<id>/updates` uses the home's `monthsNeedingAction` for its
+     call to action and "to submit" count and marks pre-start drafts "Not required" (§6).
+  4. **Deadline extensions aligned** between `/admin/cycles` and the review page: not in the past, at most a year ahead
+     (`newDueDateIssue` / `earliestExtensionDate` in M4, `extensionDateError` / `extensionChoices().latest` in M6; §6).
+  5. **Permissions:** `canManageCompanySegments(ctx, companyId, companyStatus?)` (§5.2) replaces the ad-hoc combination on
+     the segments page and action and in `tests/db/permissions-parity.test.ts`.
+  6. **Navigation and links:** the proxy sends signed-out browser navigations to `/api/*` to `/login?next=<referring page>`
+     instead of raw 401 JSON (`tests/unit/proxy.test.ts`); the company switcher keeps the Revenue segments page when
+     switching companies; the home's close card deep-links `?close=`; closes whose
+     document pack exceeds 100 MB no longer offer "Download all"; catch-all error boundaries `src/app/admin/error.tsx` and
+     `src/app/portal/[companyId]/error.tsx`. Wire-up checked: every sidebar link resolves to a page whose guard matches the
+     nav visibility, and the cross-module links (tracker → review, review → on-behalf form / documents / settings, company
+     → `/admin/users?company=`, history → C4 export, home → updates / documents, exports and audit deep links) use real
+     routes and parameters (§4). The §5.7 stubs are implemented (no `STUB` markers left).
+  7. **Shared code:** `src/lib/fetch-all.ts` (`fetchAllRows`) replaces the identical copies in the tracker and /admin/cycles.
+  8. **Contract:** §1, §4 (ownership incl. SEG and `scripts/create-user.ts` → M2; routes and deep links as built; `/access`
+     sign-in links → `/mfa?next=/set-password`; proxy), §5.2, §5.7, new §5.8 (shared APIs added by the modules), §6 (rules
+     above).
+  9. **Tests:** new `tests/features/m5/updates-list.test.ts`; new cases in `tests/features/m1/actions.test.ts`,
+     `tests/features/m4/cycles-model.test.ts`, `tests/features/m6/{comparison,review-state}.test.ts`,
+     `tests/features/m7/{render,views-render}.test.ts`, `tests/features/m8/render.test.ts`,
+     `tests/features/seg/revenue-form.test.ts`, `tests/unit/{permissions,proxy}.test.ts`.
+  Verified: `npx next typegen`; `npm run typecheck` (0 errors); `npm test` (117 files, 1,644 tests, all passing; 1,627 + 4
+  failing before the integration); `npx eslint src tests scripts` (clean); `npm run build` (PASS: 46 routes incl. `/_not-found` and the two icons, plus the proxy).
 - **2026-10-01 — B30: two revenue breakdowns (segments core step, before the B30 UI step).** BRD §6.1 and §13 B30 (product
   owner, 1 Oct 2026). New migration `supabase/migrations/20261001000200_revenue_segments_b30.sql` — **to push** (`npm run
   db:push` by the lead; dry run PASS on the hosted PostgreSQL 17.6 with `npm run db:verify`: 10 deployed, 1 pending, 23

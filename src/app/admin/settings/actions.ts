@@ -14,7 +14,7 @@ import { assertScaleUp } from "@/lib/auth/session";
 import { getPlatformSettings } from "@/lib/data";
 import { createClient } from "@/lib/supabase/server";
 
-import { settingsFromRow, settingsUpdate, updateSettingsSchema } from "./_lib/settings-model";
+import { MFA_ALWAYS_ON_MESSAGE, settingsFromRow, settingsUpdate, updateSettingsSchema } from "./_lib/settings-model";
 
 const STALE_MESSAGE =
   "Someone else changed the settings while you were editing. Reload the page to see their changes, then try again.";
@@ -30,6 +30,9 @@ export async function updateSettingsAction(input: unknown): Promise<ActionResult
     const sb = await createClient();
     const current = await getPlatformSettings(sb);
     const update = settingsUpdate(settingsFromRow(current), values);
+    // BRD §11, B11: two-factor authentication is required for everyone; it can be turned (back) on here,
+    // never off (a lost authenticator is handled per person with the 2FA reset on /admin/users).
+    if (update.require_mfa === false) throw new ActionError(MFA_ALWAYS_ON_MESSAGE);
     if (Object.keys(update).length === 0) return ok({ changed: false });
     if (current.updated_at !== expectedUpdatedAt) throw new ActionError(STALE_MESSAGE);
 

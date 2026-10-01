@@ -19,6 +19,7 @@ import {
   type ExtendTarget,
 } from "../_lib/cycles-model";
 import { ClosesPanel } from "./closes-panel";
+import { CycleSettingsDialog } from "./cycle-settings-dialog";
 import { CyclesSummary } from "./cycles-summary";
 import { DeadlinesPanel } from "./deadlines-panel";
 import { ExtendDeadlineDialog } from "./extend-deadline-dialog";
@@ -82,6 +83,9 @@ export function CyclesWorkspace({
     return { key: 0, open: target !== null, target };
   });
 
+  // "Change cycle settings" (BRD A5, B10: Super Admins and Fund Admins); a new key per opening.
+  const [settingsDialog, setSettingsDialog] = useState({ key: 0, open: false });
+
   const hasChoices = data.deadlineChoices.length > 0;
   const missingRates = data.fx.reduce((total, group) => total + group.missing.length, 0);
 
@@ -117,11 +121,24 @@ export function CyclesWorkspace({
         description={
           <>
             Months open automatically on the 1st of the following month and are due on the {ordinal(data.dueDay)} of
-            that month. A month that opens after that date gets {plural(data.graceDays, "day")} from opening.{" "}
+            that month. A month that opens after that date gets {plural(data.graceDays, "day")} from opening, and
+            overdue months escalate after {plural(data.escalationDays, "day")}.{" "}
+            {canOpenMonths ? (
+              <button
+                type="button"
+                onClick={() => setSettingsDialog((current) => ({ key: current.key + 1, open: true }))}
+                className="rounded-sm font-medium text-foreground underline underline-offset-3 outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+              >
+                Change cycle settings
+              </button>
+            ) : null}
             {canEditSettings ? (
-              <Link href="/admin/settings" className="font-medium text-foreground underline underline-offset-3">
-                Change these in Settings
-              </Link>
+              <>
+                {canOpenMonths ? " · " : null}
+                <Link href="/admin/settings" className="font-medium text-foreground underline underline-offset-3">
+                  All settings
+                </Link>
+              </>
             ) : null}
           </>
         }
@@ -213,6 +230,17 @@ export function CyclesWorkspace({
           choices={data.deadlineChoices}
           today={data.today}
           initial={extend.target}
+        />
+      ) : null}
+      {canOpenMonths ? (
+        <CycleSettingsDialog
+          key={settingsDialog.key}
+          open={settingsDialog.open}
+          onOpenChange={(open) => setSettingsDialog((current) => ({ ...current, open }))}
+          dueDay={data.dueDay}
+          graceDays={data.graceDays}
+          escalationDays={data.escalationDays}
+          updatedAt={data.settingsUpdatedAt ?? null}
         />
       ) : null}
     </>

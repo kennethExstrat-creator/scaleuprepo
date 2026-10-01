@@ -4,9 +4,9 @@
   "description": "End-to-end tests (Playwright) for the ScaleUp Portfolio Reporting Platform",
   "scripts": {
     "test": "playwright test",
-    "setup": "tsx helpers/run-setup.ts",
-    "teardown": "tsx helpers/run-teardown.ts",
-    "report": "playwright show-report"
+    "setup": "tsx scripts/setup-data.ts",
+    "teardown": "tsx scripts/teardown-data.ts",
+    "report": "tsx scripts/summarize.ts"
   },
   "keywords": [],
   "author": "",
